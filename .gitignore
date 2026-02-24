@@ -136,6 +136,20 @@ ENV/
 env.bak/
 venv.bak/
 
+# Jupyter
+.ipynb_checkpoints/
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
 # Spyder project settings
 .spyderproject
 .spyproject

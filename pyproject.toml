@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name="potaudit"
+version="1.0"
+
+dependencies = [
+    "ase",
+]
+
+[project.scripts]
+potaudit = "potaudit.cli:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}

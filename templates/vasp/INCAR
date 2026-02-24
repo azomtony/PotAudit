@@ -1,0 +1,26 @@
+SYSTEM = PotAudit_SP
+GGA    = PE
+
+ENCUT  = 520
+PREC   = Accurate
+EDIFF  = 1E-6
+
+ISMEAR = 0
+SIGMA  = 0.05
+ISPIN  = 1
+ISYM   = 0
+
+ALGO   = Normal
+NELM   = 80
+NELMDL = 5
+LREAL  = Auto
+
+IBRION = -1
+NSW    = 0
+ISIF   = 2
+
+LWAVE  = .FALSE.
+LCHARG = .FALSE.
+
+# Dispersion: pick ONE standard and keep it consistent
+IVDW   = 12
