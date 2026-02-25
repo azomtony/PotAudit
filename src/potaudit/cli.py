@@ -228,6 +228,38 @@ def _add_collect_vasp_subcommand(subparsers) -> None:
     p.add_argument("--allow-missing-forces", action="store_true", help="Do not require forces to be present")
     p.set_defaults(func=_run_collect_vasp)
 
+# Single point from UMA
+
+def _run_uma_annotate(args: argparse.Namespace) -> int:
+    from .uma_annotate import annotate_extxyz_with_uma
+
+    rep = annotate_extxyz_with_uma(
+        in_extxyz=args.input,
+        out_extxyz=args.out,
+        model_name=args.model_name,
+        task_name=args.task_name,
+        device=args.device,
+        overwrite=args.overwrite,
+        add_deltas=(not args.no_deltas),
+    )
+
+    print(f"[PotAudit] wrote={rep.written_frames} out={rep.out_path}")
+    return 0
+
+
+def _add_uma_annotate_subcommand(subparsers) -> None:
+    p = subparsers.add_parser(
+        "uma-annotate",
+        help="Compute UMA single-point energy/forces and append to extxyz.",
+    )
+    p.add_argument("--input", required=True, help="Input extxyz (VASP merged)")
+    p.add_argument("--out", default="vasp_plus_uma.extxyz", help="Output extxyz")
+    p.add_argument("--model-name", required=True, help="e.g. uma-s-1p1")
+    p.add_argument("--task-name", default="omol", help="Default: omol")
+    p.add_argument("--device", default="cuda", help="cuda or cpu")
+    p.add_argument("--overwrite", action="store_true")
+    p.add_argument("--no-deltas", action="store_true")
+    p.set_defaults(func=_run_uma_annotate)
 #------------End Subcommand----------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -241,6 +273,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_submit_subcommand(subparser)
     _add_status_subcommand(subparser)
     _add_collect_vasp_subcommand(subparser)
+    _add_uma_annotate_subcommand(subparser)
 #------------End subcommands registration----------------
 
     args=parser.parse_args(argv)
