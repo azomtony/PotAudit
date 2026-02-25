@@ -11,16 +11,29 @@ from ase.io import read, write
 
 
 @dataclass(frozen=True)
+class CollectReport:
+    written_frames: int
+    skipped_not_completed: int
+    skipped_failed: int
+    skipped_missing_output: int
+    out_path: str
+    bad_jobs: List[Tuple[str, str]]  # (jobdir, reason)
+
+
+@dataclass(frozen=True)
 class CollectedFrame:
     job: str
     atoms: Atoms
     energy_ev: float
     ok: bool
     reason: str
+    completed: bool
 
 
 _TOTEN_RE = re.compile(r"free\s+energy\s+TOTEN\s*=\s*([-\d\.Ee+]+)\s+eV")
-_FORCE_HEADER_RE = re.compile(r"^\s*POSITION\s+TOTAL-FORCE\s+\(eV/Angst\)\s*$", re.MULTILINE)
+_FORCE_HEADER_RE = re.compile(
+    r"^\s*POSITION\s+TOTAL-FORCE\s+\(eV/Angst\)\s*$", re.MULTILINE
+)
 _DASH_RE = re.compile(r"^\s*-{5,}\s*$")
 
 
@@ -34,20 +47,12 @@ def _parse_last_force_block(outcar_text: str) -> Optional[Tuple[np.ndarray, np.n
     Returns (positions[N,3], forces[N,3]) from the LAST
     'POSITION ... TOTAL-FORCE (eV/Angst)' block.
     """
-    # find all headers
     headers = list(_FORCE_HEADER_RE.finditer(outcar_text))
     if not headers:
         return None
 
-    # take the last header and parse after it
     start = headers[-1].end()
     tail = outcar_text[start:]
-
-    # The block typically starts after dashed line(s)
-    # We'll scan line-by-line, collecting rows until we hit:
-    # - "total drift:" line, or
-    # - a dashed separator after rows, or
-    # - blank line after we started collecting
     lines = tail.splitlines()
 
     collecting = False
@@ -57,27 +62,22 @@ def _parse_last_force_block(outcar_text: str) -> Optional[Tuple[np.ndarray, np.n
     for ln in lines:
         s = ln.strip()
 
-        # skip initial separators
         if not collecting and (_DASH_RE.match(ln) or s == ""):
             continue
 
-        # stop conditions
         if collecting:
             if s.lower().startswith("total drift:"):
                 break
             if _DASH_RE.match(ln):
-                # many OUTCARs have dashed line after the table
                 break
             if s == "":
                 break
 
-        # parse a data row: x y z fx fy fz
         parts = s.split()
         if len(parts) >= 6:
             try:
                 x, y, z, fx, fy, fz = map(float, parts[:6])
             except ValueError:
-                # not a numeric line
                 if collecting:
                     break
                 continue
@@ -96,83 +96,130 @@ def _parse_last_force_block(outcar_text: str) -> Optional[Tuple[np.ndarray, np.n
     return pos, frc
 
 
-def collect_one_job_dir(jobdir: Path) -> CollectedFrame:
+def _outcar_completed(outcar_text: str) -> bool:
+    # Normal VASP footer marker
+    return "General timing and accounting" in outcar_text
+
+
+def collect_one_job_dir(
+    jobdir: Path,
+    *,
+    require_forces: bool,
+) -> CollectedFrame:
     poscar = jobdir / "POSCAR"
     outcar = jobdir / "OUTCAR"
-    if not poscar.exists():
-        return CollectedFrame(jobdir.name, Atoms(), 0.0, False, "missing_POSCAR")
-    if not outcar.exists() or outcar.stat().st_size < 1000:
-        return CollectedFrame(jobdir.name, Atoms(), 0.0, False, "missing_or_small_OUTCAR")
 
-    # read POSCAR for symbols/cell/pbc
+    if not poscar.exists():
+        return CollectedFrame(jobdir.name, Atoms(), 0.0, False, "missing_POSCAR", False)
+    if not outcar.exists() or outcar.stat().st_size < 1000:
+        return CollectedFrame(jobdir.name, Atoms(), 0.0, False, "missing_or_small_OUTCAR", False)
+
     base = read(str(poscar), format="vasp")
     symbols = base.get_chemical_symbols()
     cell = base.get_cell()
     pbc = base.get_pbc()
 
     txt = outcar.read_text(errors="ignore")
+    completed = _outcar_completed(txt)
 
     toten = _parse_last_toten(txt)
     if toten is None:
-        return CollectedFrame(jobdir.name, Atoms(), 0.0, False, "missing_TOTEN")
+        return CollectedFrame(jobdir.name, Atoms(), 0.0, False, "missing_TOTEN", completed)
 
     fb = _parse_last_force_block(txt)
     if fb is None:
-        return CollectedFrame(jobdir.name, Atoms(), toten, False, "missing_force_block")
-    pos, frc = fb
+        if require_forces:
+            return CollectedFrame(jobdir.name, Atoms(), float(toten), False, "missing_force_block", completed)
 
+        # If forces are not required, still output positions (from POSCAR)
+        atoms = Atoms(symbols=symbols, positions=base.get_positions(), cell=cell, pbc=pbc)
+        atoms.info["energy"] = float(toten)
+        atoms.info["potaudit_job"] = jobdir.name
+        return CollectedFrame(jobdir.name, atoms, float(toten), True, "ok_no_forces", completed)
+
+    pos, frc = fb
     if pos.shape[0] != len(symbols):
         return CollectedFrame(
-            jobdir.name, Atoms(), toten, False,
-            f"nions_mismatch_poscar={len(symbols)}_outcar={pos.shape[0]}"
+            jobdir.name,
+            Atoms(),
+            float(toten),
+            False,
+            f"nions_mismatch_poscar={len(symbols)}_outcar={pos.shape[0]}",
+            completed,
         )
 
     atoms = Atoms(symbols=symbols, positions=pos, cell=cell, pbc=pbc)
     atoms.info["energy"] = float(toten)
     atoms.arrays["forces"] = frc
-
-    # keep provenance
     atoms.info["potaudit_job"] = jobdir.name
 
-    return CollectedFrame(jobdir.name, atoms, float(toten), True, "ok")
+    return CollectedFrame(jobdir.name, atoms, float(toten), True, "ok", completed)
 
 
 def collect_vasp_extxyz(
     *,
     out_root: str,
-    out_path: str,
-    include_bad: bool = False,
-) -> None:
+    out_extxyz: str,
+    only_ok: bool = True,
+    require_forces: bool = True,
+) -> CollectReport:
+    """
+    Collect a merged extxyz from VASP job folders using only POSCAR + OUTCAR.
+    Does NOT read state.json.
+
+    only_ok=True -> require OUTCAR to look completed (footer present).
+    require_forces=True -> require force block in OUTCAR.
+    """
     out_root_p = Path(out_root).resolve()
+    if not out_root_p.exists():
+        raise FileNotFoundError(f"out_root not found: {out_root_p}")
+
     jobs = [d for d in sorted(out_root_p.iterdir()) if d.is_dir()]
 
     frames: List[Atoms] = []
-    bad: List[Tuple[str, str]] = []
+    bad_jobs: List[Tuple[str, str]] = []
+
+    skipped_not_completed = 0
+    skipped_failed = 0
+    skipped_missing_output = 0
 
     for d in jobs:
-        rep = collect_one_job_dir(d)
-        if rep.ok:
-            frames.append(rep.atoms)
-        else:
-            bad.append((rep.job, rep.reason))
-            if include_bad:
-                # optional: you could still write something, but usually skip
-                pass
+        rep = collect_one_job_dir(d, require_forces=require_forces)
+
+        if not rep.ok:
+            bad_jobs.append((rep.job, rep.reason))
+            if rep.reason.startswith("missing_") or rep.reason == "missing_or_small_OUTCAR":
+                skipped_missing_output += 1
+            else:
+                skipped_failed += 1
+            continue
+
+        if only_ok and not rep.completed:
+            bad_jobs.append((rep.job, "not_completed_OUTCAR_footer_missing"))
+            skipped_not_completed += 1
+            continue
+
+        frames.append(rep.atoms)
 
     if not frames:
-        # print a helpful summary
         msg = "No frames collected.\n"
         msg += f"Checked {len(jobs)} job folders.\n"
-        if bad:
+        msg += f"only_ok={only_ok} require_forces={require_forces}\n"
+        if bad_jobs:
             msg += "Top failures:\n"
-            for j, r in bad[:20]:
+            for j, r in bad_jobs[:30]:
                 msg += f"  {j}: {r}\n"
         raise RuntimeError(msg)
 
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
-    write(out_path, frames, format="extxyz")
-    print(f"[PotAudit] collected {len(frames)} frames -> {out_path}")
-    if bad:
-        print(f"[PotAudit] skipped {len(bad)} bad jobs (showing up to 20):")
-        for j, r in bad[:20]:
-            print(f"  {j}: {r}")
+    out_path = Path(out_extxyz).resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    write(str(out_path), frames, format="extxyz")
+
+    return CollectReport(
+        written_frames=len(frames),
+        skipped_not_completed=skipped_not_completed,
+        skipped_failed=skipped_failed,
+        skipped_missing_output=skipped_missing_output,
+        out_path=str(out_path),
+        bad_jobs=bad_jobs,
+    )
