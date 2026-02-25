@@ -16,6 +16,7 @@ class StatusReport:
     bad: int
     running: int
     pending: int
+    lines: List[str]   # per-job human-readable lines
 
 
 def _utcnow() -> str:
@@ -39,13 +40,14 @@ def _state_path(jobdir: Path) -> Path:
 def _run(cmd: List[str]) -> str:
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
-        # sacct can return nonzero in some configs; we’ll still show output
-        raise RuntimeError(f"Command failed: {' '.join(cmd)}\nSTDOUT:\n{r.stdout}\nSTDERR:\n{r.stderr}")
+        raise RuntimeError(
+            f"Command failed: {' '.join(cmd)}\nSTDOUT:\n{r.stdout}\nSTDERR:\n{r.stderr}"
+        )
     return r.stdout.strip()
 
 
 def _slurm_squeue_state(jobid: str) -> Optional[str]:
-    # returns e.g. "R", "PD" or None if not in squeue
+    # returns e.g. RUNNING, PENDING or None if not in squeue
     try:
         out = _run(["squeue", "-j", jobid, "-h", "-o", "%T"])
     except Exception:
@@ -53,14 +55,12 @@ def _slurm_squeue_state(jobid: str) -> Optional[str]:
     out = out.strip()
     if not out:
         return None
-    # Examples: RUNNING, PENDING
     return out.splitlines()[0].strip()
 
 
 def _slurm_sacct_state(jobid: str) -> Tuple[Optional[str], Optional[str]]:
     # returns (State, ExitCode) like ("COMPLETED", "0:0")
     out = _run(["sacct", "-j", jobid, "--format=State,ExitCode", "-n", "-P"])
-    # sacct may show multiple lines (batch/extern). Pick the first non-empty.
     for ln in out.splitlines():
         ln = ln.strip()
         if not ln:
@@ -81,66 +81,76 @@ def _vasp_validate(jobdir: Path) -> Tuple[bool, str, Optional[float], Optional[i
 
     txt = outcar.read_text(errors="ignore")
 
-    # Normal termination signature
     if "General timing and accounting" not in txt:
         return False, "no_timing_footer", None, None
 
-    # Extract NIONS if available
     nions = None
     m = re.search(r"NIONS\s*=\s*(\d+)", txt)
     if m:
         nions = int(m.group(1))
 
-    # Extract last TOTEN
-    # OUTCAR lines look like: "free  energy   TOTEN  =   -123.4567 eV"
     toten = None
     for m in re.finditer(r"free\s+energy\s+TOTEN\s*=\s*([-\d\.Ee+]+)\s+eV", txt):
         toten = float(m.group(1))
     if toten is None:
         return False, "no_TOTEN_found", None, nions
 
-    # Confirm we have at least one force block
     if "TOTAL-FORCE (eV/Angst)" not in txt:
         return False, "no_force_block", toten, nions
 
     return True, "ok", toten, nions
 
 
-def status_update(
-    *,
-    out_root: str,
-) -> StatusReport:
+def _compact_live_state(sq: str) -> str:
+    s = sq.strip().upper()
+    # normalize common slurm strings to your labels
+    if s.startswith("RUN"):
+        return "running"
+    if s.startswith("PEND"):
+        return "pending"
+    # other states (COMPLETING, CONFIGURING, SUSPENDED, etc.)
+    return s.lower()
+
+
+def status_update(*, out_root: str) -> StatusReport:
     out_root_p = Path(out_root).resolve()
     updated = 0
     ok = bad = running = pending = 0
+    lines: List[str] = []
 
     for jobdir in sorted(out_root_p.iterdir()):
         if not jobdir.is_dir():
             continue
+
         st_path = _state_path(jobdir)
         st = _read_state(st_path)
+
+        # Only report jobs we have submitted (your original behavior)
         if not st or not st.get("submitted"):
             continue
 
         jid = st.get("slurm_job_id")
         if not jid:
+            lines.append(f"{jobdir.name} [missing_jobid]")
             continue
 
-        # If already completed and validated, you can still re-check if you want.
-        # We'll update slurm state anyway.
         sq = _slurm_squeue_state(str(jid))
         if sq is not None:
             st["slurm_state"] = sq
             st["checked_at"] = _utcnow()
             updated += 1
-            if sq.upper().startswith("RUN"):
+
+            label = _compact_live_state(sq)
+            if label == "running":
                 running += 1
-            elif sq.upper().startswith("PEND"):
+            elif label == "pending":
                 pending += 1
+
+            lines.append(f"{jobdir.name} [{label}]")
             _write_state(st_path, st)
             continue
 
-        # Not in squeue => terminal state in sacct
+        # Not in squeue => terminal state from sacct
         state, exitcode = _slurm_sacct_state(str(jid))
         st["slurm_state"] = state
         st["slurm_exit_code"] = exitcode
@@ -150,6 +160,7 @@ def status_update(
 
         if terminal_ok:
             v_ok, reason, toten, nions = _vasp_validate(jobdir)
+
             st["vasp_ok"] = bool(v_ok)
             st["vasp_reason"] = reason
             st["vasp_energy_toten_ev"] = toten
@@ -161,8 +172,10 @@ def status_update(
 
             if v_ok:
                 ok += 1
+                lines.append(f"{jobdir.name} [completed/ok]")
             else:
                 bad += 1
+                lines.append(f"{jobdir.name} [completed/bad:{reason}]")
         else:
             st["completed"] = True
             st["failed"] = True
@@ -171,8 +184,16 @@ def status_update(
             st["vasp_reason"] = f"slurm_{state}_{exitcode}"
 
             bad += 1
+            lines.append(f"{jobdir.name} [completed/bad:slurm_{state}_{exitcode}]")
 
         updated += 1
         _write_state(st_path, st)
 
-    return StatusReport(updated=updated, ok=ok, bad=bad, running=running, pending=pending)
+    return StatusReport(
+        updated=updated,
+        ok=ok,
+        bad=bad,
+        running=running,
+        pending=pending,
+        lines=lines,
+    )

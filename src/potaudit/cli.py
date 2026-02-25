@@ -187,6 +187,10 @@ def _add_submit_subcommand(subparsers) -> None:
 def _run_status(args: argparse.Namespace) -> int:
     from .status import status_update
     rep = status_update(out_root=args.out_root)
+
+    for ln in rep.lines:
+        print(ln)
+
     print(f"[PotAudit] updated={rep.updated} ok={rep.ok} bad={rep.bad} running={rep.running} pending={rep.pending}")
     return 0
 
