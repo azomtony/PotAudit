@@ -260,6 +260,31 @@ def _add_uma_annotate_subcommand(subparsers) -> None:
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-deltas", action="store_true")
     p.set_defaults(func=_run_uma_annotate)
+
+# Merge extxyz
+def _run_merge_extxyz(args):
+    from .merge_extxyz import merge_vasp_and_uma_extxyz
+
+    merge_vasp_and_uma_extxyz(
+        vasp_extxyz=args.vasp,
+        uma_extxyz=args.uma,
+        out_extxyz=args.out,
+        overwrite=args.overwrite,
+    )
+
+    print(f"[PotAudit] merged -> {args.out}")
+    return 0
+
+def _add_merge_extxyz_subcommand(subparsers):
+    p = subparsers.add_parser(
+        "merge-extxyz",
+        help="Merge VASP extxyz and UMA extxyz into one file.",
+    )
+    p.add_argument("--vasp", required=True, help="VASP extxyz file")
+    p.add_argument("--uma", required=True, help="UMA extxyz file")
+    p.add_argument("--out", default="vasp_plus_uma.extxyz", help="Output extxyz file")
+    p.add_argument("--overwrite", action="store_true")
+    p.set_defaults(func=_run_merge_extxyz)
 #------------End Subcommand----------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -274,6 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_status_subcommand(subparser)
     _add_collect_vasp_subcommand(subparser)
     _add_uma_annotate_subcommand(subparser)
+    _add_merge_extxyz_subcommand(subparser)
 #------------End subcommands registration----------------
 
     args=parser.parse_args(argv)
