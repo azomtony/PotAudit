@@ -137,7 +137,7 @@ def collect_one_job_dir(jobdir: Path) -> CollectedFrame:
     return CollectedFrame(jobdir.name, atoms, float(toten), True, "ok")
 
 
-def collect_vasp_extxyz_no_state(
+def collect_vasp_extxyz(
     *,
     out_root: str,
     out_path: str,
