@@ -129,14 +129,34 @@ def _add_select_prep_vasp_subcommand(subparsers: argparse._SubParsersAction) -> 
 
 def _run_submit(args: argparse.Namespace) -> int:
     from .submit import submit_jobs
+
     rep = submit_jobs(
         out_root=args.out_root,
         max_inflight=args.max_inflight,
         watch=args.watch,
         poll_sec=args.poll_sec,
         limit=args.limit,
+        verbose=(not args.quiet),
+        crosscheck_squeue=(not args.no_crosscheck_squeue),
+        refresh_status_in_watch=(not args.no_status_refresh),
     )
-    print(f"[PotAudit] inflight={rep.inflight} submitted={len(rep.submitted)} skipped={len(rep.skipped)}")
+
+    # Print a useful summary
+    if not args.quiet:
+        if rep.submitted:
+            # show all submitted names (or cap it, your choice)
+            print(f"[PotAudit] submitted {len(rep.submitted)}: " + ", ".join(rep.submitted))
+        else:
+            print("[PotAudit] submitted 0")
+
+        print(
+            f"[PotAudit] inflight={rep.inflight} "
+            f"remaining_ready={getattr(rep, 'remaining_ready', 'NA')} "
+            f"skipped={len(rep.skipped)}"
+        )
+    else:
+        print(f"[PotAudit] inflight={rep.inflight} submitted={len(rep.submitted)} skipped={len(rep.skipped)}")
+
     return 0
 
 
@@ -147,6 +167,20 @@ def _add_submit_subcommand(subparsers) -> None:
     p.add_argument("--watch", action="store_true", help="Keep feeding jobs until nothing left to submit")
     p.add_argument("--poll-sec", type=int, default=60, help="Polling interval in watch mode (default: 60)")
     p.add_argument("--limit", type=int, default=None, help="Submit at most N new jobs this run")
+
+    # NEW flags
+    p.add_argument("--quiet", action="store_true", help="Less output")
+    p.add_argument(
+        "--no-crosscheck-squeue",
+        action="store_true",
+        help="Do NOT cross-check inflight with squeue (not recommended; can get stuck if state.json is stale)",
+    )
+    p.add_argument(
+        "--no-status-refresh",
+        action="store_true",
+        help="In --watch mode, do NOT call status_update() to free capacity (not recommended)",
+    )
+
     p.set_defaults(func=_run_submit)
 
 
