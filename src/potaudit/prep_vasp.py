@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable, List, Optional
 
-from ase.io import read, write
+from ase.io import read, write, iread
 
 
 @dataclass(frozen=True)
@@ -224,10 +224,31 @@ def prep_vasp(
         # Write state.json
         state = {
             "frame_index": i,
+
+            # lifecycle
             "prepared": True,
             "submitted": False,
             "completed": False,
+            "failed": False,
+
+            # slurm tracking
+            "slurm_job_id": None,
+            "slurm_state": None,
+            "slurm_exit_code": None,
+
+            # vasp validation
+            "vasp_ok": None,
+            "vasp_reason": None,
+            "vasp_energy_toten_ev": None,
+            "vasp_nions": None,
+
+            # timestamps
             "created_at": datetime.utcnow().isoformat() + "Z",
+            "submitted_at": None,
+            "completed_at": None,
+            "checked_at": None,
+
+            # provenance
             "extxyz_path": str(Path(extxyz_path).resolve()),
             "templates_dir": str(tdir.resolve()),
             "poscar_elements": elements_order,
@@ -263,3 +284,163 @@ def prep_vasp_from_indices_file(
         potcar_suffix=potcar_suffix,
         force=force,
     )
+
+def select_and_prep_vasp(
+    *,
+    extxyz_path: str,
+    out_root: str,
+    templates_dir: Optional[str] = None,
+    potcar_root: Optional[str] = None,
+    potcar_suffix: str = "",
+    max_frames: int = 50,
+    stride: Optional[int] = None,
+    start: int = 0,
+    stop: Optional[int] = None,
+    force: bool = False,
+) -> PrepReport:
+    """
+    Select frames + prepare VASP folders in ONE pass over extxyz.
+
+    Selection rules match select_frames():
+      - If stride is provided: pick start, start+stride, ...
+      - If stride is None: auto-stride to keep <= max_frames within [start, stop)
+    """
+    out_root_p = Path(out_root)
+    out_root_p.mkdir(parents=True, exist_ok=True)
+
+    tdir = _default_templates_dir() if templates_dir is None else Path(templates_dir).resolve()
+    incar_t = tdir / "INCAR"
+    kpoints_t = tdir / "KPOINTS"
+    sub_vasp_t = tdir / "sub_vasp.sh"
+
+    if not incar_t.exists():
+        raise FileNotFoundError(f"Missing INCAR template: {incar_t}")
+    if not kpoints_t.exists():
+        raise FileNotFoundError(f"Missing KPOINTS template: {kpoints_t}")
+    if not sub_vasp_t.exists():
+        raise FileNotFoundError(f"Missing sub_vasp.sh template: {sub_vasp_t}")
+
+    potroot_p = Path(potcar_root).resolve() if potcar_root else None
+    if potroot_p and not potroot_p.exists():
+        raise FileNotFoundError(f"POTCAR root not found: {potroot_p}")
+
+    # -------- pass 1: count frames (needed for auto-stride / negative start/stop) --------
+    n_total = 0
+    for _ in iread(extxyz_path):
+        n_total += 1
+    if n_total == 0:
+        raise ValueError(f"No frames found in {extxyz_path}")
+
+    if start < 0:
+        start = max(0, n_total + start)
+
+    if stop is None:
+        stop = n_total
+    elif stop < 0:
+        stop = max(0, n_total + stop)
+
+    start = max(0, min(start, n_total))
+    stop = max(0, min(stop, n_total))
+    if stop <= start:
+        raise ValueError(f"Invalid range: start={start}, stop={stop}, n_frames={n_total}")
+
+    span = stop - start
+    if stride is None:
+        if max_frames <= 0:
+            raise ValueError("max_frames must be > 0")
+        stride = max(1, span // max_frames)
+    if stride <= 0:
+        raise ValueError("stride must be > 0")
+
+    # -------- pass 2: stream + prep selected frames --------
+    prepared: List[int] = []
+    skipped: List[int] = []
+
+    selected_count = 0
+    for i, atoms in enumerate(iread(extxyz_path)):
+        if i < start or i >= stop:
+            continue
+        if (i - start) % stride != 0:
+            continue
+
+        # hard cap
+        if selected_count >= max_frames:
+            break
+        selected_count += 1
+
+        jobdir = out_root_p / f"{i:06d}"
+        jobdir.mkdir(parents=True, exist_ok=True)
+        state_p = _state_path(jobdir)
+
+        if state_p.exists() and not force:
+            skipped.append(i)
+            continue
+
+        atoms = _group_atoms_by_element(atoms)
+
+        # POSCAR
+        poscar_p = jobdir / "POSCAR"
+        write(poscar_p, atoms, format="vasp")
+
+        # templates
+        shutil.copy(incar_t, jobdir / "INCAR")
+        shutil.copy(kpoints_t, jobdir / "KPOINTS")
+        # Copy templates
+        _render_submit_script(
+            template_path=sub_vasp_t,
+            out_path=jobdir / "sub_vasp.sh",
+            job_name=jobdir.name,  # "000123"
+        )
+
+        # POTCAR (optional)
+        elements_order = _elements_first_appearance(atoms)
+        potcar_p = jobdir / "POTCAR"
+        if potroot_p:
+            _build_potcar(
+                potcar_root=potroot_p,
+                elements=elements_order,
+                out_path=potcar_p,
+                potcar_suffix=potcar_suffix,
+            )
+
+        # state.json
+        state = {
+            "frame_index": i,
+
+            # lifecycle
+            "prepared": True,
+            "submitted": False,
+            "completed": False,
+            "failed": False,
+
+            # slurm tracking
+            "slurm_job_id": None,
+            "slurm_state": None,
+            "slurm_exit_code": None,
+
+            # vasp validation
+            "vasp_ok": None,
+            "vasp_reason": None,
+            "vasp_energy_toten_ev": None,
+            "vasp_nions": None,
+
+            # timestamps
+            "created_at": datetime.utcnow().isoformat() + "Z",
+            "submitted_at": None,
+            "completed_at": None,
+            "checked_at": None,
+
+            # provenance
+            "extxyz_path": str(Path(extxyz_path).resolve()),
+            "templates_dir": str(tdir.resolve()),
+            "poscar_elements": elements_order,
+            "poscar_sha1": _sha1_file(poscar_p),
+            "potcar_root": str(potroot_p) if potroot_p else None,
+            "potcar_suffix": potcar_suffix,
+            "potcar_sha1": _sha1_file(potcar_p) if potcar_p.exists() else None,
+        }
+        state_p.write_text(json.dumps(state, indent=2) + "\n")
+
+        prepared.append(i)
+
+    return PrepReport(prepared=prepared, skipped=skipped)

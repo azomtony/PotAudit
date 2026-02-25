@@ -84,6 +84,84 @@ def _add_prep_vasp_subcommand(subparsers: argparse._SubParsersAction) -> None:
 
     p.set_defaults(func=_run_prep_vasp)
 
+# Seleect and Prep VASP can be chained in a shell script like:
+
+def _run_select_prep_vasp(args: argparse.Namespace) -> int:
+    from .prep_vasp import select_and_prep_vasp
+
+    report = select_and_prep_vasp(
+        extxyz_path=args.input,
+        out_root=args.out_root,
+        templates_dir=args.templates_dir,
+        potcar_root=args.potcar_root,
+        potcar_suffix=args.potcar_suffix,
+        max_frames=args.max_frames,
+        stride=args.stride,
+        start=args.start,
+        stop=args.stop,
+        force=args.force,
+    )
+    print(f"[PotAudit] prepared={len(report.prepared)} skipped={len(report.skipped)}")
+    return 0
+
+
+def _add_select_prep_vasp_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "select-prep-vasp",
+        help="Select frames and prepare VASP job folders in one command.",
+    )
+    p.add_argument("--input", required=True, help="Input multi-frame extxyz")
+    p.add_argument("--out-root", required=True, help="Output root directory for VASP folders")
+
+    p.add_argument("--max-frames", type=int, default=50)
+    p.add_argument("--stride", type=int, default=None)
+    p.add_argument("--start", type=int, default=0)
+    p.add_argument("--stop", type=int, default=None)
+
+    p.add_argument("--templates-dir", default=None, help="Override templates dir (default: repo templates/vasp)")
+    p.add_argument("--potcar-root", default=None, help="Pseudopotential root (e.g. potpaw_PBE.64)")
+    p.add_argument("--potcar-suffix", default="", help="Suffix like _pv, _GW, _sv_GW (applied to all elements)")
+    p.add_argument("--force", action="store_true", help="Overwrite even if state.json exists")
+
+    p.set_defaults(func=_run_select_prep_vasp)
+
+#Submit jobs and check status subcommands are in submit.py and status.py respectively, to avoid circular imports in this cli module.
+
+def _run_submit(args: argparse.Namespace) -> int:
+    from .submit import submit_jobs
+    rep = submit_jobs(
+        out_root=args.out_root,
+        max_inflight=args.max_inflight,
+        watch=args.watch,
+        poll_sec=args.poll_sec,
+        limit=args.limit,
+    )
+    print(f"[PotAudit] inflight={rep.inflight} submitted={len(rep.submitted)} skipped={len(rep.skipped)}")
+    return 0
+
+
+def _add_submit_subcommand(subparsers) -> None:
+    p = subparsers.add_parser("submit", help="Submit VASP jobs (idempotent).")
+    p.add_argument("--out-root", required=True, help="Root directory containing 000000/ style job folders")
+    p.add_argument("--max-inflight", type=int, default=100, help="Max RUNNING+PENDING jobs at once (default: 100)")
+    p.add_argument("--watch", action="store_true", help="Keep feeding jobs until nothing left to submit")
+    p.add_argument("--poll-sec", type=int, default=60, help="Polling interval in watch mode (default: 60)")
+    p.add_argument("--limit", type=int, default=None, help="Submit at most N new jobs this run")
+    p.set_defaults(func=_run_submit)
+
+
+def _run_status(args: argparse.Namespace) -> int:
+    from .status import status_update
+    rep = status_update(out_root=args.out_root)
+    print(f"[PotAudit] updated={rep.updated} ok={rep.ok} bad={rep.bad} running={rep.running} pending={rep.pending}")
+    return 0
+
+
+def _add_status_subcommand(subparsers) -> None:
+    p = subparsers.add_parser("status", help="Update status + validate VASP outputs.")
+    p.add_argument("--out-root", required=True, help="Root directory containing 000000/ style job folders")
+    p.set_defaults(func=_run_status)
+
 #------------End Subcommand----------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -93,6 +171,9 @@ def main(argv: list[str] | None = None) -> int:
 #------------Register subcommands here----------------
     _add_select_subcommand(subparser)
     _add_prep_vasp_subcommand(subparser)
+    _add_select_prep_vasp_subcommand(subparser)
+    _add_submit_subcommand(subparser)
+    _add_status_subcommand(subparser)
 #------------End subcommands registration----------------
 
     args=parser.parse_args(argv)
