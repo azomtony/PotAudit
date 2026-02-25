@@ -200,6 +200,34 @@ def _add_status_subcommand(subparsers) -> None:
     p.add_argument("--out-root", required=True, help="Root directory containing 000000/ style job folders")
     p.set_defaults(func=_run_status)
 
+#Collect vasp output as extxyz
+
+def _run_collect_vasp(args: argparse.Namespace) -> int:
+    from .collect_vasp import collect_vasp_extxyz
+    rep = collect_vasp_extxyz(
+        out_root=args.out_root,
+        out_extxyz=args.out,
+        only_ok=(not args.include_bad),
+        require_forces=(not args.allow_missing_forces),
+    )
+    print(
+        f"[PotAudit] wrote={rep.written_frames} "
+        f"skipped_not_completed={rep.skipped_not_completed} "
+        f"skipped_failed={rep.skipped_failed} "
+        f"skipped_missing_output={rep.skipped_missing_output} "
+        f"out={rep.out_path}"
+    )
+    return 0
+
+
+def _add_collect_vasp_subcommand(subparsers) -> None:
+    p = subparsers.add_parser("collect-vasp", help="Merge completed VASP jobs into a multi-frame extxyz (positions/forces/energy).")
+    p.add_argument("--out-root", required=True, help="Root directory containing 000000/ style job folders")
+    p.add_argument("--out", default="vasp_merged.extxyz", help="Output merged extxyz path")
+    p.add_argument("--include-bad", action="store_true", help="Include jobs with vasp_ok=false (not recommended)")
+    p.add_argument("--allow-missing-forces", action="store_true", help="Do not require forces to be present")
+    p.set_defaults(func=_run_collect_vasp)
+
 #------------End Subcommand----------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -212,6 +240,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_select_prep_vasp_subcommand(subparser)
     _add_submit_subcommand(subparser)
     _add_status_subcommand(subparser)
+    _add_collect_vasp_subcommand(subparser)
 #------------End subcommands registration----------------
 
     args=parser.parse_args(argv)
