@@ -259,6 +259,7 @@ def _add_uma_annotate_subcommand(subparsers) -> None:
     p.add_argument("--device", default="cuda", help="cuda or cpu")
     p.add_argument("--overwrite", action="store_true")
     p.add_argument("--no-deltas", action="store_true")
+    p.add_argument("--ft", action="store_true", help="Load fine-tuned model from model-name path instead of pretrained")
     p.set_defaults(func=_run_uma_annotate)
 
 # Merge extxyz
