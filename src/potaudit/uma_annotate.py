@@ -41,7 +41,7 @@ def annotate_extxyz_with_uma(
     device: str = "cuda",
     overwrite: bool = False,
     add_deltas: bool = True,
-    ft:bool = False,
+    ft:bool = True,
 ) -> UMAAnnotateReport:
     frames = read(in_extxyz, index=":")
     if len(frames) == 0:
