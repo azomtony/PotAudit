@@ -18,7 +18,7 @@ def _build_uma_calculator(
     model_name: str,
     task_name: str = "omol",
     device: str = "cuda",
-    ft:bool = False,
+    ft:bool = True,
 ):
     from fairchem.core import pretrained_mlip, FAIRChemCalculator
     from fairchem.core.units.mlip_unit import load_predict_unit
