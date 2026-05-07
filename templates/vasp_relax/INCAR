@@ -1,0 +1,30 @@
+SYSTEM = PotAudit_RELAX
+GGA    = PE
+
+ENCUT  = 520
+PREC   = Accurate
+EDIFF  = 1E-6
+EDIFFG = -0.03
+
+ISMEAR = 0
+SIGMA  = 0.05
+ISPIN  = 1
+ISYM   = 0
+
+ALGO   = Normal
+NELM   = 80
+NELMDL = 5
+LREAL  = Auto
+
+IBRION = 2
+NSW    = 200
+ISIF   = 2
+
+LWAVE  = .FALSE.
+LCHARG = .FALSE.
+
+LDIPOL = .TRUE.
+IDIPOL = 3
+
+# Dispersion: pick ONE standard and keep it consistent
+IVDW   = 12

@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional
 
+import numpy as np
+from ase import Atoms
+from ase.constraints import FixAtoms
 from ase.io import read, write, iread
 
 
@@ -15,6 +19,12 @@ from ase.io import read, write, iread
 class PrepReport:
     prepared: List[int]
     skipped: List[int]
+
+
+@dataclass(frozen=True)
+class PrepDirReport:
+    prepared: List[str]
+    skipped: List[str]
 
 
 def _sha1_file(path: Path) -> str:
@@ -60,7 +70,12 @@ def _default_templates_dir() -> Path:
     """
     repo_root = Path(__file__).resolve().parents[2]  # potaudit -> src -> repo
     return repo_root / "templates" / "vasp"
-from ase import Atoms
+
+
+def _default_relax_templates_dir() -> Path:
+    repo_root = Path(__file__).resolve().parents[2]
+    return repo_root / "templates" / "vasp_relax"
+
 
 def _group_atoms_by_element(atoms) -> Atoms:
     """
@@ -101,6 +116,153 @@ def _render_submit_script(
     txt = txt.replace("__JOB_NAME__", job_name)
     out_path.write_text(txt)
     out_path.chmod(0o755)
+
+
+def _format_incar_value(value: object) -> str:
+    if isinstance(value, bool):
+        return ".TRUE." if value else ".FALSE."
+    return str(value)
+
+
+def _write_incar_with_overrides(
+    *,
+    template_path: Path,
+    out_path: Path,
+    overrides: Dict[str, object],
+) -> None:
+    """
+    Write an INCAR from a template while replacing/appending key-value settings.
+    Keeps comments and unrelated template settings intact.
+    """
+    remaining = {k.upper(): _format_incar_value(v) for k, v in overrides.items()}
+    lines: List[str] = []
+    key_re = re.compile(r"^(\s*)([A-Za-z][A-Za-z0-9_]*)\s*=.*$")
+
+    for line in template_path.read_text().splitlines():
+        m = key_re.match(line)
+        if m:
+            key = m.group(2).upper()
+            if key in remaining:
+                lines.append(f"{key:<6} = {remaining.pop(key)}")
+                continue
+        lines.append(line)
+
+    if remaining:
+        if lines and lines[-1].strip():
+            lines.append("")
+        lines.append("# PotAudit optimization overrides")
+        for key in sorted(remaining):
+            lines.append(f"{key:<6} = {remaining[key]}")
+
+    out_path.write_text("\n".join(lines) + "\n")
+
+
+def _safe_job_name(text: str) -> str:
+    name = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    name = name.strip("._-")
+    return name or "structure"
+
+
+def _extxyz_job_base(extxyz_path: Path, input_dir: Path) -> str:
+    rel = extxyz_path.relative_to(input_dir)
+    stem_parts = list(rel.with_suffix("").parts)
+    return _safe_job_name("__".join(stem_parts))
+
+
+def _as_atoms_list(frames) -> List[Atoms]:
+    if isinstance(frames, Atoms):
+        return [frames]
+    return list(frames)
+
+
+def _parse_extra_incar_settings(settings: Optional[Iterable[str]]) -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
+    for item in settings or []:
+        if "=" not in item:
+            raise ValueError(f"Invalid INCAR setting '{item}'. Expected KEY=VALUE.")
+        key, value = item.split("=", 1)
+        key = key.strip().upper()
+        value = value.strip()
+        if not key or not value:
+            raise ValueError(f"Invalid INCAR setting '{item}'. Expected KEY=VALUE.")
+        parsed[key] = value
+    return parsed
+
+
+def _bottom_layer_indices(
+    atoms: Atoms,
+    *,
+    n_layers: int = 1,
+    tolerance: float = 0.5,
+    axis: str = "frac-c",
+) -> List[int]:
+    """
+    Identify bottom slab layer(s) by clustering along the slab-normal coordinate.
+
+    axis="frac-c" uses fractional coordinate along the cell c direction. This is
+    appropriate for non-orthogonal slab cells as long as the vacuum/slab normal
+    is represented by the third cell vector. Tolerance is still in Angstrom.
+    """
+    if n_layers <= 0:
+        return []
+    if tolerance < 0:
+        raise ValueError("bottom layer tolerance must be >= 0")
+
+    if axis == "frac-c":
+        cell = np.asarray(atoms.get_cell(), dtype=float)
+        ab_area = float(np.linalg.norm(np.cross(cell[0], cell[1])))
+        volume = abs(float(np.linalg.det(cell)))
+        if ab_area <= 0.0 or volume <= 0.0:
+            raise ValueError("Cannot detect fractional-c layers without a valid 3D cell")
+        coord_to_angstrom = volume / ab_area
+        coord = atoms.get_scaled_positions(wrap=False)[:, 2]
+    elif axis == "cart-z":
+        coord_to_angstrom = 1.0
+        coord = atoms.get_positions()[:, 2]
+    else:
+        raise ValueError(f"Unsupported bottom layer axis '{axis}'. Use 'frac-c' or 'cart-z'.")
+
+    rows = sorted((float(value), i) for i, value in enumerate(coord))
+    if not rows:
+        return []
+
+    layers: List[List[int]] = []
+    current: List[int] = [rows[0][1]]
+    prev_value = rows[0][0]
+
+    for value, idx in rows[1:]:
+        gap_angstrom = (value - prev_value) * coord_to_angstrom
+        if gap_angstrom <= tolerance:
+            current.append(idx)
+        else:
+            layers.append(current)
+            current = [idx]
+        prev_value = value
+
+    layers.append(current)
+
+    fixed: List[int] = []
+    for layer in layers[:n_layers]:
+        fixed.extend(layer)
+    return sorted(fixed)
+
+
+def _fix_bottom_layers(
+    atoms: Atoms,
+    *,
+    n_layers: int,
+    tolerance: float,
+    axis: str,
+) -> List[int]:
+    fixed_indices = _bottom_layer_indices(
+        atoms,
+        n_layers=n_layers,
+        tolerance=tolerance,
+        axis=axis,
+    )
+    if fixed_indices:
+        atoms.set_constraint(FixAtoms(indices=fixed_indices))
+    return fixed_indices
 
 def _build_potcar(
     *,
@@ -262,6 +424,179 @@ def prep_vasp(
         prepared.append(i)
 
     return PrepReport(prepared=prepared, skipped=skipped)
+
+
+def prep_vasp_optimizations_from_extxyz_dir(
+    *,
+    input_dir: str,
+    out_root: str,
+    templates_dir: Optional[str] = None,
+    potcar_root: Optional[str] = None,
+    potcar_suffix: str = "",
+    pattern: str = "*.extxyz",
+    recursive: bool = False,
+    index: str = ":",
+    nsw: Optional[int] = None,
+    ibrion: Optional[int] = None,
+    isif: Optional[int] = None,
+    ediffg: Optional[float] = None,
+    incar_set: Optional[Iterable[str]] = None,
+    fix_bottom_layers: int = 1,
+    bottom_layer_tol: float = 0.5,
+    bottom_layer_axis: str = "frac-c",
+    force: bool = False,
+) -> PrepDirReport:
+    """
+    Prepare VASP geometry-optimization folders from extxyz files in a directory.
+
+    Each discovered extxyz file contributes the frames selected by ``index``.
+    The default index ":" prepares all frames. Single-frame inputs get a job
+    folder named after the file stem; multi-frame inputs get a frame suffix.
+    """
+    input_dir_p = Path(input_dir).resolve()
+    if not input_dir_p.exists() or not input_dir_p.is_dir():
+        raise FileNotFoundError(f"input_dir not found or not a directory: {input_dir_p}")
+
+    out_root_p = Path(out_root)
+    out_root_p.mkdir(parents=True, exist_ok=True)
+
+    tdir = _default_relax_templates_dir() if templates_dir is None else Path(templates_dir).resolve()
+    incar_t = tdir / "INCAR"
+    kpoints_t = tdir / "KPOINTS"
+    sub_vasp_t = tdir / "sub_vasp.sh"
+    if not incar_t.exists():
+        raise FileNotFoundError(f"Missing INCAR template: {incar_t}")
+    if not kpoints_t.exists():
+        raise FileNotFoundError(f"Missing KPOINTS template: {kpoints_t}")
+    if not sub_vasp_t.exists():
+        raise FileNotFoundError(f"Missing sub_vasp.sh template: {sub_vasp_t}")
+
+    potroot_p = Path(potcar_root).resolve() if potcar_root else None
+    if potroot_p and not potroot_p.exists():
+        raise FileNotFoundError(f"POTCAR root not found: {potroot_p}")
+
+    extxyz_files = sorted(input_dir_p.rglob(pattern) if recursive else input_dir_p.glob(pattern))
+    extxyz_files = [p for p in extxyz_files if p.is_file()]
+    if not extxyz_files:
+        raise FileNotFoundError(f"No extxyz files matched pattern '{pattern}' in {input_dir_p}")
+
+    ase_index: object = int(index) if str(index).lstrip("-").isdigit() else index
+    incar_overrides: Dict[str, object] = {}
+    if ibrion is not None:
+        incar_overrides["IBRION"] = ibrion
+    if nsw is not None:
+        incar_overrides["NSW"] = nsw
+    if isif is not None:
+        incar_overrides["ISIF"] = isif
+    if ediffg is not None:
+        incar_overrides["EDIFFG"] = ediffg
+    incar_overrides.update(_parse_extra_incar_settings(incar_set))
+
+    prepared: List[str] = []
+    skipped: List[str] = []
+
+    for extxyz_p in extxyz_files:
+        frames = _as_atoms_list(read(str(extxyz_p), index=ase_index))
+        if not frames:
+            raise ValueError(f"No frames found in {extxyz_p}")
+
+        base_name = _extxyz_job_base(extxyz_p, input_dir_p)
+        for frame_ordinal, atoms in enumerate(frames):
+            if len(frames) == 1:
+                job_name = base_name
+            else:
+                job_name = f"{base_name}__frame_{frame_ordinal:06d}"
+
+            jobdir = out_root_p / job_name
+            jobdir.mkdir(parents=True, exist_ok=True)
+            state_p = _state_path(jobdir)
+
+            if state_p.exists() and not force:
+                skipped.append(job_name)
+                continue
+
+            atoms = _group_atoms_by_element(atoms)
+            fixed_atom_indices = _fix_bottom_layers(
+                atoms,
+                n_layers=fix_bottom_layers,
+                tolerance=bottom_layer_tol,
+                axis=bottom_layer_axis,
+            )
+
+            poscar_p = jobdir / "POSCAR"
+            write(poscar_p, atoms, format="vasp")
+
+            _write_incar_with_overrides(
+                template_path=incar_t,
+                out_path=jobdir / "INCAR",
+                overrides=incar_overrides,
+            )
+            shutil.copy(kpoints_t, jobdir / "KPOINTS")
+            _render_submit_script(
+                template_path=sub_vasp_t,
+                out_path=jobdir / "sub_vasp.sh",
+                job_name=job_name,
+            )
+
+            elements_order = _elements_first_appearance(atoms)
+            potcar_p = jobdir / "POTCAR"
+            if potroot_p:
+                _build_potcar(
+                    potcar_root=potroot_p,
+                    elements=elements_order,
+                    out_path=potcar_p,
+                    potcar_suffix=potcar_suffix,
+                )
+
+            state = {
+                "job_type": "optimization",
+                "frame_index": frame_ordinal,
+
+                # lifecycle
+                "prepared": True,
+                "submitted": False,
+                "completed": False,
+                "failed": False,
+
+                # slurm tracking
+                "slurm_job_id": None,
+                "slurm_state": None,
+                "slurm_exit_code": None,
+
+                # vasp validation
+                "vasp_ok": None,
+                "vasp_reason": None,
+                "vasp_energy_toten_ev": None,
+                "vasp_nions": None,
+
+                # timestamps
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "submitted_at": None,
+                "completed_at": None,
+                "checked_at": None,
+
+                # provenance
+                "extxyz_path": str(extxyz_p.resolve()),
+                "extxyz_input_dir": str(input_dir_p),
+                "extxyz_index": str(index),
+                "source_frame_ordinal": frame_ordinal,
+                "templates_dir": str(tdir.resolve()),
+                "incar_overrides": {k: _format_incar_value(v) for k, v in incar_overrides.items()},
+                "fix_bottom_layers": fix_bottom_layers,
+                "bottom_layer_tol": bottom_layer_tol,
+                "bottom_layer_axis": bottom_layer_axis,
+                "fixed_atom_indices": fixed_atom_indices,
+                "poscar_elements": elements_order,
+                "poscar_sha1": _sha1_file(poscar_p),
+                "potcar_root": str(potroot_p) if potroot_p else None,
+                "potcar_suffix": potcar_suffix,
+                "potcar_sha1": _sha1_file(potcar_p) if potcar_p.exists() else None,
+            }
+            state_p.write_text(json.dumps(state, indent=2) + "\n")
+
+            prepared.append(job_name)
+
+    return PrepDirReport(prepared=prepared, skipped=skipped)
 
 
 def prep_vasp_from_indices_file(
