@@ -85,6 +85,64 @@ def _add_prep_vasp_subcommand(subparsers: argparse._SubParsersAction) -> None:
     p.set_defaults(func=_run_prep_vasp)
 
 
+def _run_prep_vasp_sp_dir(args: argparse.Namespace) -> int:
+    from .prep_vasp import prep_vasp_singlepoints_from_extxyz_dir
+
+    report = prep_vasp_singlepoints_from_extxyz_dir(
+        input_dir=args.input_dir,
+        out_root=args.out_root,
+        templates_dir=args.templates_dir,
+        potcar_root=args.potcar_root,
+        potcar_suffix=args.potcar_suffix,
+        pattern=args.pattern,
+        recursive=args.recursive,
+        index=args.index,
+        job_prefix=args.job_prefix,
+        incar_set=args.incar_set,
+        force=args.force,
+    )
+    print(
+        f"[PotAudit] prep-vasp-sp-dir prepared={len(report.prepared)} "
+        f"skipped={len(report.skipped)}"
+    )
+    return 0
+
+
+def _add_prep_vasp_sp_dir_subcommand(subparsers: argparse._SubParsersAction) -> None:
+    p = subparsers.add_parser(
+        "prep-vasp-sp-dir",
+        help="Prepare VASP single-point folders from *_opt.extxyz files in a directory.",
+    )
+    p.add_argument("--input-dir", required=True, help="Directory containing extxyz files")
+    p.add_argument("--out-root", required=True, help="Output root directory for VASP single-point folders")
+    p.add_argument("--pattern", default="*_opt.extxyz", help="File glob to match inside input-dir (default: *_opt.extxyz)")
+    p.add_argument("--recursive", action="store_true", help="Search input-dir recursively")
+    p.add_argument(
+        "--index",
+        default=":",
+        help="ASE frame index to read from each extxyz (default ':' = all frames; examples: 0, -1, 0:10:2)",
+    )
+    p.add_argument(
+        "--templates-dir",
+        "--templates",
+        dest="templates_dir",
+        default=None,
+        help="Templates directory containing INCAR, KPOINTS, and sub_vasp.sh (default: repo templates/vasp)",
+    )
+    p.add_argument("--potcar-root", default=None, help="Pseudopotential root (e.g. potpaw_PBE.64)")
+    p.add_argument("--potcar-suffix", default="", help="Suffix like _pv, _GW, _sv_GW (applied to all elements)")
+    p.add_argument("--job-prefix", default="sp", help="Short job folder prefix (default: sp)")
+    p.add_argument(
+        "--incar-set",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Extra INCAR override. Can be used multiple times.",
+    )
+    p.add_argument("--force", action="store_true", help="Overwrite even if state.json exists")
+    p.set_defaults(func=_run_prep_vasp_sp_dir)
+
+
 def _run_prep_vasp_opt_dir(args: argparse.Namespace) -> int:
     from .prep_vasp import prep_vasp_optimizations_from_extxyz_dir
 
@@ -382,6 +440,7 @@ def main(argv: list[str] | None = None) -> int:
 #------------Register subcommands here----------------
     _add_select_subcommand(subparser)
     _add_prep_vasp_subcommand(subparser)
+    _add_prep_vasp_sp_dir_subcommand(subparser)
     _add_prep_vasp_opt_dir_subcommand(subparser)
     _add_select_prep_vasp_subcommand(subparser)
     _add_submit_subcommand(subparser)

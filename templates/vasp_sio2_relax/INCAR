@@ -1,0 +1,32 @@
+SYSTEM = PotAudit_SIO2_RELAX
+GGA    = PE
+
+ENCUT  = 520
+PREC   = Accurate
+EDIFF  = 1E-6
+EDIFFG = -0.03
+
+ISMEAR = 0
+SIGMA  = 0.05
+ISPIN  = 1
+ISYM   = 0
+
+ALGO   = Normal
+NELM   = 100
+NELMDL = 5
+LREAL  = .FALSE.
+LASPH  = .TRUE.
+
+IBRION = 2
+NSW    = 200
+ISIF   = 2
+POTIM  = 0.5
+
+LWAVE  = .FALSE.
+LCHARG = .FALSE.
+
+LDIPOL = .TRUE.
+IDIPOL = 3
+
+# Dispersion: keep consistent with the training/comparison workflow
+IVDW   = 12

@@ -150,7 +150,7 @@ def _write_incar_with_overrides(
     if remaining:
         if lines and lines[-1].strip():
             lines.append("")
-        lines.append("# PotAudit optimization overrides")
+        lines.append("# PotAudit INCAR overrides")
         for key in sorted(remaining):
             lines.append(f"{key:<6} = {remaining[key]}")
 
@@ -424,6 +424,156 @@ def prep_vasp(
         prepared.append(i)
 
     return PrepReport(prepared=prepared, skipped=skipped)
+
+
+def prep_vasp_singlepoints_from_extxyz_dir(
+    *,
+    input_dir: str,
+    out_root: str,
+    templates_dir: Optional[str] = None,
+    potcar_root: Optional[str] = None,
+    potcar_suffix: str = "",
+    pattern: str = "*_opt.extxyz",
+    recursive: bool = False,
+    index: str = ":",
+    job_prefix: str = "sp",
+    incar_set: Optional[Iterable[str]] = None,
+    force: bool = False,
+) -> PrepDirReport:
+    """
+    Prepare VASP single-point folders from extxyz files in a directory.
+
+    By default this only reads *_opt.extxyz files, which keeps *_init.extxyz
+    files available for later optimization tests.
+    """
+    input_dir_p = Path(input_dir).resolve()
+    if not input_dir_p.exists() or not input_dir_p.is_dir():
+        raise FileNotFoundError(f"input_dir not found or not a directory: {input_dir_p}")
+
+    out_root_p = Path(out_root)
+    out_root_p.mkdir(parents=True, exist_ok=True)
+
+    tdir = _default_templates_dir() if templates_dir is None else Path(templates_dir).resolve()
+    incar_t = tdir / "INCAR"
+    kpoints_t = tdir / "KPOINTS"
+    sub_vasp_t = tdir / "sub_vasp.sh"
+    if not incar_t.exists():
+        raise FileNotFoundError(f"Missing INCAR template: {incar_t}")
+    if not kpoints_t.exists():
+        raise FileNotFoundError(f"Missing KPOINTS template: {kpoints_t}")
+    if not sub_vasp_t.exists():
+        raise FileNotFoundError(f"Missing sub_vasp.sh template: {sub_vasp_t}")
+
+    potroot_p = Path(potcar_root).resolve() if potcar_root else None
+    if potroot_p and not potroot_p.exists():
+        raise FileNotFoundError(f"POTCAR root not found: {potroot_p}")
+
+    extxyz_files = sorted(input_dir_p.rglob(pattern) if recursive else input_dir_p.glob(pattern))
+    extxyz_files = [p for p in extxyz_files if p.is_file()]
+    if not extxyz_files:
+        raise FileNotFoundError(f"No extxyz files matched pattern '{pattern}' in {input_dir_p}")
+
+    ase_index: object = int(index) if str(index).lstrip("-").isdigit() else index
+    incar_overrides = _parse_extra_incar_settings(incar_set)
+    prefix = _safe_job_name(job_prefix)
+
+    prepared: List[str] = []
+    skipped: List[str] = []
+    job_counter = 0
+
+    for extxyz_p in extxyz_files:
+        frames = _as_atoms_list(read(str(extxyz_p), index=ase_index))
+        if not frames:
+            raise ValueError(f"No frames found in {extxyz_p}")
+
+        for frame_ordinal, atoms in enumerate(frames):
+            job_name = f"{prefix}_{job_counter:06d}"
+            job_counter += 1
+
+            jobdir = out_root_p / job_name
+            jobdir.mkdir(parents=True, exist_ok=True)
+            state_p = _state_path(jobdir)
+
+            if state_p.exists() and not force:
+                skipped.append(job_name)
+                continue
+
+            atoms = _group_atoms_by_element(atoms)
+
+            poscar_p = jobdir / "POSCAR"
+            write(poscar_p, atoms, format="vasp")
+
+            if incar_overrides:
+                _write_incar_with_overrides(
+                    template_path=incar_t,
+                    out_path=jobdir / "INCAR",
+                    overrides=incar_overrides,
+                )
+            else:
+                shutil.copy(incar_t, jobdir / "INCAR")
+            shutil.copy(kpoints_t, jobdir / "KPOINTS")
+            _render_submit_script(
+                template_path=sub_vasp_t,
+                out_path=jobdir / "sub_vasp.sh",
+                job_name=job_name,
+            )
+
+            elements_order = _elements_first_appearance(atoms)
+            potcar_p = jobdir / "POTCAR"
+            if potroot_p:
+                _build_potcar(
+                    potcar_root=potroot_p,
+                    elements=elements_order,
+                    out_path=potcar_p,
+                    potcar_suffix=potcar_suffix,
+                )
+
+            state = {
+                "job_type": "single_point",
+                "frame_index": frame_ordinal,
+
+                # lifecycle
+                "prepared": True,
+                "submitted": False,
+                "completed": False,
+                "failed": False,
+
+                # slurm tracking
+                "slurm_job_id": None,
+                "slurm_state": None,
+                "slurm_exit_code": None,
+
+                # vasp validation
+                "vasp_ok": None,
+                "vasp_reason": None,
+                "vasp_energy_toten_ev": None,
+                "vasp_nions": None,
+
+                # timestamps
+                "created_at": datetime.utcnow().isoformat() + "Z",
+                "submitted_at": None,
+                "completed_at": None,
+                "checked_at": None,
+
+                # provenance
+                "extxyz_path": str(extxyz_p.resolve()),
+                "extxyz_input_dir": str(input_dir_p),
+                "extxyz_name": extxyz_p.name,
+                "extxyz_index": str(index),
+                "source_frame_ordinal": frame_ordinal,
+                "templates_dir": str(tdir.resolve()),
+                "incar_overrides": {k: _format_incar_value(v) for k, v in incar_overrides.items()},
+                "poscar_elements": elements_order,
+                "poscar_sha1": _sha1_file(poscar_p),
+                "potcar_root": str(potroot_p) if potroot_p else None,
+                "potcar_suffix": potcar_suffix,
+                "potcar_sha1": _sha1_file(potcar_p) if potcar_p.exists() else None,
+            }
+            state_p.write_text(json.dumps(state, indent=2) + "\n")
+
+            prepared.append(job_name)
+
+    return PrepDirReport(prepared=prepared, skipped=skipped)
 
 
 def prep_vasp_optimizations_from_extxyz_dir(

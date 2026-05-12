@@ -9,6 +9,7 @@ Create one VASP relaxation job folder per extxyz structure/frame in a directory:
 potaudit prep-vasp-opt-dir \
   --input-dir path/to/extxyz_dir \
   --out-root runs/case001/vasp_opt \
+  --templates-dir templates/vasp_sio2_relax \
   --potcar-root /path/to/potpaw_PBE.64
 ```
 
@@ -23,3 +24,31 @@ for non-orthogonal slab cells when the slab/vacuum direction is the third cell
 vector. Use `--fix-bottom-layers 2` to fix more layers,
 `--bottom-layer-tol 0.4` to tune layer clustering, or `--no-fix-bottom` to relax
 all atoms.
+
+## Template Sets
+
+Molecule/default single-point templates live in `templates/vasp`. SiO2 slab
+single-point templates live in `templates/vasp_sio2`:
+
+```bash
+potaudit prep-vasp-sp-dir \
+  --input-dir path/to/extxyz_dir \
+  --out-root runs/sio2_sp \
+  --templates-dir templates/vasp_sio2 \
+  --potcar-root /path/to/potpaw_PBE.64
+```
+
+`prep-vasp-sp-dir` defaults to `--pattern '*_opt.extxyz'`, so paired
+`*_init.extxyz` files are ignored for single-point evaluation. It creates short
+job folders like `sp_000000` while storing the original long source filename in
+`state.json`.
+
+SiO2 slab relaxation templates live in `templates/vasp_sio2_relax`:
+
+```bash
+potaudit prep-vasp-opt-dir \
+  --input-dir path/to/extxyz_dir \
+  --out-root runs/sio2_relax \
+  --templates-dir templates/vasp_sio2_relax \
+  --potcar-root /path/to/potpaw_PBE.64
+```
