@@ -1,10 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=__JOB_NAME__
 #SBATCH --output=slurm-%x-%j.out
-#SBATCH --partition=Standard.2.0
+#SBATCH --partition=Standard
 #SBATCH --time=12:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=64
+#SBATCH --ntasks=28
 
 set -euo pipefail
 
