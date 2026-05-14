@@ -1,0 +1,28 @@
+SYSTEM = PotAudit_Cu_SP
+GGA    = PE
+
+ENCUT  = 520
+PREC   = Normal
+EDIFF  = 1E-6
+
+ISMEAR = 1
+SIGMA  = 0.2
+ISPIN  = 1
+ISYM   = 0
+
+ALGO   = Fast
+NELM   = 200
+NELMDL = -5
+LREAL  = Auto
+LASPH  = .TRUE.
+
+IBRION = -1
+NSW    = 0
+
+LWAVE  = .FALSE.
+LCHARG = .FALSE.
+
+LDIPOL = .FALSE.
+
+# Dispersion: keep consistent with the training/comparison workflow
+IVDW   = 12
