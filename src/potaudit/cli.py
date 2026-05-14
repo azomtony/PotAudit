@@ -386,6 +386,7 @@ def _run_uma_annotate(args: argparse.Namespace) -> int:
         device=args.device,
         overwrite=args.overwrite,
         add_deltas=(not args.no_deltas),
+        ft=args.ft,
     )
 
     print(f"[PotAudit] wrote={rep.written_frames} out={rep.out_path}")

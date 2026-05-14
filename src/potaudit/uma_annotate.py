@@ -18,7 +18,7 @@ def _build_uma_calculator(
     model_name: str,
     task_name: str = "omol",
     device: str = "cuda",
-    ft:bool = True,
+    ft: bool = False,
 ):
     from fairchem.core import pretrained_mlip, FAIRChemCalculator
     from fairchem.core.units.mlip_unit import load_predict_unit
@@ -26,7 +26,7 @@ def _build_uma_calculator(
         print(f"Loading fine-tuned model from {model_name} on device {device}...")
         predictor = load_predict_unit(model_name, device=device)
     else:
-        print(f"Loading pretrained model {model_name} on device {device}...")   
+        print(f"Loading pretrained model {model_name} on device {device}...")
         predictor = pretrained_mlip.get_predict_unit(model_name, device=device)
     calc = FAIRChemCalculator(predictor, task_name=task_name)
     return calc
@@ -41,7 +41,7 @@ def annotate_extxyz_with_uma(
     device: str = "cuda",
     overwrite: bool = False,
     add_deltas: bool = True,
-    ft:bool = True,
+    ft: bool = False,
 ) -> UMAAnnotateReport:
     frames = read(in_extxyz, index=":")
     if len(frames) == 0:
