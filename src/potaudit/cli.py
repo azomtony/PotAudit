@@ -344,6 +344,7 @@ def _run_resubmit(args: argparse.Namespace) -> int:
         verbose=(not args.quiet),
         crosscheck_squeue=(not args.no_crosscheck_squeue),
         refresh_status=(not args.no_status_refresh),
+        strict_slurm_logs=args.strict_slurm_log,
     )
 
     if args.dry_run:
@@ -395,6 +396,11 @@ def _add_resubmit_subcommand(subparsers) -> None:
     )
     p.add_argument("--exclude", default=None, help="Rewrite/add #SBATCH --exclude, e.g. node001,node002")
     p.add_argument("--dry-run", action="store_true", help="Show jobs that would be resubmitted without calling sbatch")
+    p.add_argument(
+        "--strict-slurm-log",
+        action="store_true",
+        help="Only resubmit incomplete VASP outputs when job logs contain Slurm/srun failure markers",
+    )
     p.add_argument("--quiet", action="store_true", help="Less output")
     p.add_argument(
         "--no-crosscheck-squeue",

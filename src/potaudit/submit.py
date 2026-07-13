@@ -50,6 +50,15 @@ _SLURM_FAILURE_PATTERNS: Tuple[Tuple[str, re.Pattern[str]], ...] = (
     ("cancelled", re.compile(r"\bCANCELLED\b|job .* cancelled", re.I)),
     ("srun_error", re.compile(r"\bsrun:\s+error:|\bslurmstepd:\s+error:", re.I)),
     ("step_aborted", re.compile(r"job step aborted|unable to create step|launch failed", re.I)),
+    (
+        "prte_lost_daemon",
+        re.compile(
+            r"PRTE has lost communication with a remote daemon|"
+            r"failure of the TCP network connection to the node|"
+            r"internal failure of the daemon itself",
+            re.I,
+        ),
+    ),
 )
 
 
@@ -200,7 +209,12 @@ def _slurm_failure_from_logs(jobdir: Path, st: Dict) -> Optional[str]:
     return None
 
 
-def _slurm_resubmit_reason(jobdir: Path, st: Dict) -> Optional[str]:
+def _slurm_resubmit_reason(
+    jobdir: Path,
+    st: Dict,
+    *,
+    strict_slurm_logs: bool = False,
+) -> Optional[str]:
     """
     Return a reason string when a job is safe to resubmit as a Slurm failure.
 
@@ -226,23 +240,27 @@ def _slurm_resubmit_reason(jobdir: Path, st: Dict) -> Optional[str]:
         return reason
 
     if reason in _LOG_RESUBMITTABLE_VASP_REASONS:
-        return _slurm_failure_from_logs(jobdir, st)
+        log_reason = _slurm_failure_from_logs(jobdir, st)
+        if log_reason:
+            return log_reason
+        if not strict_slurm_logs:
+            return f"incomplete_vasp_output:{reason}"
 
     return None
 
 
-def _eligible_resubmit_count(out_root: Path) -> int:
+def _eligible_resubmit_count(out_root: Path, *, strict_slurm_logs: bool = False) -> int:
     n = 0
     for d in sorted(out_root.iterdir()):
         if not d.is_dir():
             continue
         st = _read_state(_state_path(d))
-        if _slurm_resubmit_reason(d, st) is not None:
+        if _slurm_resubmit_reason(d, st, strict_slurm_logs=strict_slurm_logs) is not None:
             n += 1
     return n
 
 
-def _resubmit_skip_reason(jobdir: Path, st: Dict) -> str:
+def _resubmit_skip_reason(jobdir: Path, st: Dict, *, strict_slurm_logs: bool = False) -> str:
     if not st:
         return "missing_state"
     if not st.get("prepared", False):
@@ -258,6 +276,8 @@ def _resubmit_skip_reason(jobdir: Path, st: Dict) -> str:
     state = _normalize_slurm_state(st.get("slurm_state"))
     if not reason.startswith("slurm_"):
         if reason in _LOG_RESUBMITTABLE_VASP_REASONS:
+            if not strict_slurm_logs:
+                return f"unexpected_skip:incomplete_vasp_output:{reason or 'unknown'}"
             return f"vasp_failure_no_slurm_log:{reason or 'unknown'}"
         return f"vasp_failure:{reason or 'unknown'}"
     if state == "COMPLETED":
@@ -345,13 +365,15 @@ def resubmit_jobs(
     verbose: bool = True,
     crosscheck_squeue: bool = True,
     refresh_status: bool = True,
+    strict_slurm_logs: bool = False,
 ) -> ResubmitReport:
     """
     Resubmit failed VASP jobs only when the recorded failure is a Slurm issue.
 
-    VASP/output/convergence failures and successful COMPLETED jobs are skipped.
-    Optional Slurm resource overrides edit each eligible job's sub_vasp.sh just
-    before sbatch is called.
+    Successful COMPLETED jobs are skipped. Incomplete VASP outputs are treated
+    as retryable unless strict_slurm_logs=True requires explicit Slurm/srun log
+    evidence. Optional Slurm resource overrides edit each eligible job's
+    sub_vasp.sh just before sbatch is called.
     """
     out_root_p = Path(out_root).resolve()
     if not out_root_p.exists():
@@ -371,7 +393,7 @@ def resubmit_jobs(
     if limit is not None:
         capacity = min(capacity, max(0, int(limit)))
 
-    eligible = _eligible_resubmit_count(out_root_p)
+    eligible = _eligible_resubmit_count(out_root_p, strict_slurm_logs=strict_slurm_logs)
     resubmitted: List[str] = []
     skipped: List[Tuple[str, str]] = []
 
@@ -381,9 +403,9 @@ def resubmit_jobs(
 
         st_path = _state_path(jobdir)
         st = _read_state(st_path)
-        reason = _slurm_resubmit_reason(jobdir, st)
+        reason = _slurm_resubmit_reason(jobdir, st, strict_slurm_logs=strict_slurm_logs)
         if reason is None:
-            skipped.append((jobdir.name, _resubmit_skip_reason(jobdir, st)))
+            skipped.append((jobdir.name, _resubmit_skip_reason(jobdir, st, strict_slurm_logs=strict_slurm_logs)))
             continue
 
         if capacity == 0:
