@@ -67,6 +67,8 @@ potaudit resubmit \
   --exclude node001,node002
 ```
 
-Use `--dry-run` first to see which jobs would be resubmitted. VASP/output
-failures such as missing timing footers or convergence failures are skipped, and
-completed successful jobs are never resubmitted.
+Use `--dry-run` first to see which jobs would be resubmitted. Completed
+successful jobs are never resubmitted. VASP/output failures such as missing
+`OUTCAR` files or missing timing footers are resubmitted only when the job logs
+also show Slurm/srun trouble such as node failure, timeout, cancellation, OOM,
+or job-step launch errors; otherwise they remain skipped as VASP failures.
