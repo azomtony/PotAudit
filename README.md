@@ -52,3 +52,21 @@ potaudit prep-vasp-opt-dir \
   --templates-dir templates/vasp_sio2_relax \
   --potcar-root /path/to/potpaw_PBE.64
 ```
+
+## Resubmit Slurm-Failed VASP Jobs
+
+After `potaudit status` has marked terminal jobs, resubmit only failures caused
+by Slurm:
+
+```bash
+potaudit resubmit \
+  --out-root runs/case001/vasp_opt \
+  --partition Standard.2.0 \
+  --nodes 1 \
+  --cores 64 \
+  --exclude node001,node002
+```
+
+Use `--dry-run` first to see which jobs would be resubmitted. VASP/output
+failures such as missing timing footers or convergence failures are skipped, and
+completed successful jobs are never resubmitted.

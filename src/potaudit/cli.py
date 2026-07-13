@@ -329,6 +329,86 @@ def _add_submit_subcommand(subparsers) -> None:
     p.set_defaults(func=_run_submit)
 
 
+def _run_resubmit(args: argparse.Namespace) -> int:
+    from .submit import resubmit_jobs
+
+    rep = resubmit_jobs(
+        out_root=args.out_root,
+        max_inflight=args.max_inflight,
+        limit=args.limit,
+        partition=args.partition,
+        nodes=args.nodes,
+        ntasks=args.ntasks,
+        exclude=args.exclude,
+        dry_run=args.dry_run,
+        verbose=(not args.quiet),
+        crosscheck_squeue=(not args.no_crosscheck_squeue),
+        refresh_status=(not args.no_status_refresh),
+    )
+
+    if args.dry_run:
+        action = "would resubmit"
+    else:
+        action = "resubmitted"
+
+    if not args.quiet:
+        if rep.resubmitted:
+            print(f"[PotAudit] {action} {len(rep.resubmitted)}: " + ", ".join(rep.resubmitted))
+        else:
+            print(f"[PotAudit] {action} 0")
+
+        skipped_by_reason = {}
+        for _, reason in rep.skipped:
+            skipped_by_reason[reason] = skipped_by_reason.get(reason, 0) + 1
+        if skipped_by_reason:
+            summary = ", ".join(f"{reason}={count}" for reason, count in sorted(skipped_by_reason.items()))
+            print(f"[PotAudit] skipped: {summary}")
+
+        print(
+            f"[PotAudit] eligible={rep.eligible} "
+            f"inflight={rep.inflight} "
+            f"remaining_capacity={rep.capacity}"
+        )
+    else:
+        print(f"[PotAudit] {action}={len(rep.resubmitted)} eligible={rep.eligible} skipped={len(rep.skipped)}")
+
+    return 0
+
+
+def _add_resubmit_subcommand(subparsers) -> None:
+    p = subparsers.add_parser(
+        "resubmit",
+        help="Resubmit failed VASP jobs only when the failure came from Slurm.",
+    )
+    p.add_argument("--out-root", required=True, help="Root directory containing VASP job folders")
+    p.add_argument("--max-inflight", type=int, default=100, help="Max RUNNING+PENDING jobs at once (default: 100)")
+    p.add_argument("--limit", type=int, default=None, help="Resubmit at most N jobs this run")
+    p.add_argument("--partition", default=None, help="Rewrite #SBATCH --partition for resubmitted jobs")
+    p.add_argument("--nodes", type=int, default=None, help="Rewrite #SBATCH --nodes for resubmitted jobs")
+    p.add_argument(
+        "--ntasks",
+        "--cores",
+        dest="ntasks",
+        type=int,
+        default=None,
+        help="Rewrite #SBATCH --ntasks for resubmitted jobs",
+    )
+    p.add_argument("--exclude", default=None, help="Rewrite/add #SBATCH --exclude, e.g. node001,node002")
+    p.add_argument("--dry-run", action="store_true", help="Show jobs that would be resubmitted without calling sbatch")
+    p.add_argument("--quiet", action="store_true", help="Less output")
+    p.add_argument(
+        "--no-crosscheck-squeue",
+        action="store_true",
+        help="Do NOT cross-check inflight with squeue",
+    )
+    p.add_argument(
+        "--no-status-refresh",
+        action="store_true",
+        help="Do NOT run status_update() before selecting failed jobs",
+    )
+    p.set_defaults(func=_run_resubmit)
+
+
 def _run_status(args: argparse.Namespace) -> int:
     from .status import status_update
     rep = status_update(out_root=args.out_root)
@@ -445,6 +525,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_prep_vasp_opt_dir_subcommand(subparser)
     _add_select_prep_vasp_subcommand(subparser)
     _add_submit_subcommand(subparser)
+    _add_resubmit_subcommand(subparser)
     _add_status_subcommand(subparser)
     _add_collect_vasp_subcommand(subparser)
     _add_uma_annotate_subcommand(subparser)

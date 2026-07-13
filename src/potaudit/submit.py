@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional, Set, Tuple
 
 # If you have status_update() in potaudit.status, we can call it in --watch mode.
 # If you prefer not to import here, you can pass a callback instead.
@@ -24,6 +24,16 @@ class SubmitReport:
     inflight: int
     capacity: int
     remaining_ready: int   # ready-to-submit jobs still left after this pass
+
+
+@dataclass(frozen=True)
+class ResubmitReport:
+    resubmitted: List[str]
+    skipped: List[Tuple[str, str]]
+    inflight: int
+    capacity: int
+    eligible: int
+    status_error: Optional[str] = None
 
 
 def _utcnow() -> str:
@@ -119,6 +129,268 @@ def _ready_to_submit_count(out_root: Path) -> int:
         if st.get("prepared", False) and (not st.get("submitted", False)) and (not st.get("completed", False)):
             n += 1
     return n
+
+
+def _normalize_slurm_state(state: Optional[str]) -> str:
+    if not state:
+        return ""
+    return state.strip().upper().split()[0].split("+")[0]
+
+
+def _slurm_resubmit_reason(st: Dict) -> Optional[str]:
+    """
+    Return a reason string when a job is safe to resubmit as a Slurm failure.
+
+    Successful VASP jobs and VASP/output/convergence failures are intentionally
+    not eligible here. Jobs with Slurm state COMPLETED are also skipped, even if
+    the exit code is non-zero, because that usually means the batch script ran
+    and the application failed rather than Slurm losing the job.
+    """
+    if not st.get("submitted"):
+        return None
+    if not st.get("prepared", False):
+        return None
+    if st.get("submitted") and not st.get("completed", False):
+        return None
+    if not st.get("failed"):
+        return None
+    if st.get("vasp_ok") is True:
+        return None
+
+    reason = str(st.get("vasp_reason") or "")
+    if not reason.startswith("slurm_"):
+        return None
+
+    state = _normalize_slurm_state(st.get("slurm_state"))
+    if not state or state == "COMPLETED":
+        return None
+
+    return reason
+
+
+def _eligible_resubmit_count(out_root: Path) -> int:
+    n = 0
+    for d in sorted(out_root.iterdir()):
+        if not d.is_dir():
+            continue
+        st = _read_state(_state_path(d))
+        if _slurm_resubmit_reason(st) is not None:
+            n += 1
+    return n
+
+
+def _set_sbatch_directive(lines: List[str], key: str, value: object) -> List[str]:
+    flag = f"--{key}"
+    rendered = f"#SBATCH {flag}={value}"
+    pattern = re.compile(rf"^(\s*#SBATCH\s+){re.escape(flag)}(?:\s+|=).*$")
+
+    out: List[str] = []
+    replaced = False
+    insert_at: Optional[int] = None
+    for i, line in enumerate(lines):
+        if line.lstrip().startswith("#SBATCH"):
+            insert_at = i + 1
+        if pattern.match(line):
+            if not replaced:
+                out.append(rendered)
+                replaced = True
+            continue
+        out.append(line)
+
+    if not replaced:
+        if insert_at is None:
+            insert_at = 1 if out and out[0].startswith("#!") else 0
+        out.insert(insert_at, rendered)
+
+    return out
+
+
+def _update_sbatch_resources(
+    script_path: Path,
+    *,
+    partition: Optional[str] = None,
+    nodes: Optional[int] = None,
+    ntasks: Optional[int] = None,
+    exclude: Optional[str] = None,
+) -> bool:
+    updates = {
+        "partition": partition,
+        "nodes": nodes,
+        "ntasks": ntasks,
+        "exclude": exclude,
+    }
+    active = {k: v for k, v in updates.items() if v is not None}
+    if not active:
+        return False
+
+    original = script_path.read_text()
+    lines = original.splitlines()
+    trailing_newline = original.endswith("\n")
+
+    for key, value in active.items():
+        lines = _set_sbatch_directive(lines, key, value)
+
+    new_txt = "\n".join(lines)
+    if trailing_newline or not new_txt:
+        new_txt += "\n"
+
+    if new_txt == original:
+        return False
+
+    script_path.write_text(new_txt)
+    script_path.chmod(0o755)
+    return True
+
+
+def _resubmit_skip_reason(st: Dict) -> str:
+    if not st:
+        return "missing_state"
+    if not st.get("prepared", False):
+        return "not_prepared"
+    if st.get("submitted") and not st.get("completed", False):
+        return "inflight"
+    if st.get("vasp_ok") is True:
+        return "completed_ok"
+    if not st.get("failed", False):
+        return "not_failed"
+
+    reason = str(st.get("vasp_reason") or "")
+    state = _normalize_slurm_state(st.get("slurm_state"))
+    if not reason.startswith("slurm_"):
+        return f"vasp_failure:{reason or 'unknown'}"
+    if state == "COMPLETED":
+        return "completed_slurm_state"
+    if not state:
+        return "missing_slurm_state"
+    return f"not_resubmittable:{reason}"
+
+
+def resubmit_jobs(
+    *,
+    out_root: str,
+    max_inflight: int = 100,
+    limit: Optional[int] = None,
+    partition: Optional[str] = None,
+    nodes: Optional[int] = None,
+    ntasks: Optional[int] = None,
+    exclude: Optional[str] = None,
+    dry_run: bool = False,
+    verbose: bool = True,
+    crosscheck_squeue: bool = True,
+    refresh_status: bool = True,
+) -> ResubmitReport:
+    """
+    Resubmit failed VASP jobs only when the recorded failure is a Slurm issue.
+
+    VASP/output/convergence failures and successful COMPLETED jobs are skipped.
+    Optional Slurm resource overrides edit each eligible job's sub_vasp.sh just
+    before sbatch is called.
+    """
+    out_root_p = Path(out_root).resolve()
+    if not out_root_p.exists():
+        raise FileNotFoundError(f"out_root not found: {out_root_p}")
+
+    status_error: Optional[str] = None
+    if refresh_status and status_update is not None:
+        try:
+            status_update(out_root=str(out_root_p))
+        except Exception as e:
+            status_error = str(e)
+            if verbose:
+                print(f"[PotAudit] status_update failed before resubmit (continuing): {e}")
+
+    inflight = _inflight_count(out_root_p, crosscheck_squeue=crosscheck_squeue)
+    capacity = max(0, int(max_inflight) - inflight)
+    if limit is not None:
+        capacity = min(capacity, max(0, int(limit)))
+
+    eligible = _eligible_resubmit_count(out_root_p)
+    resubmitted: List[str] = []
+    skipped: List[Tuple[str, str]] = []
+
+    for jobdir in sorted(out_root_p.iterdir()):
+        if not jobdir.is_dir():
+            continue
+
+        st_path = _state_path(jobdir)
+        st = _read_state(st_path)
+        reason = _slurm_resubmit_reason(st)
+        if reason is None:
+            skipped.append((jobdir.name, _resubmit_skip_reason(st)))
+            continue
+
+        if capacity == 0:
+            skipped.append((jobdir.name, "capacity"))
+            continue
+
+        sub_sh = jobdir / "sub_vasp.sh"
+        if not sub_sh.exists():
+            skipped.append((jobdir.name, "missing_sub_vasp.sh"))
+            continue
+
+        if dry_run:
+            resubmitted.append(jobdir.name)
+            capacity -= 1
+            inflight += 1
+            continue
+
+        resources_changed = _update_sbatch_resources(
+            sub_sh,
+            partition=partition,
+            nodes=nodes,
+            ntasks=ntasks,
+            exclude=exclude,
+        )
+
+        previous_attempt = {
+            "slurm_job_id": st.get("slurm_job_id"),
+            "slurm_state": st.get("slurm_state"),
+            "slurm_exit_code": st.get("slurm_exit_code"),
+            "vasp_reason": st.get("vasp_reason"),
+            "submitted_at": st.get("submitted_at"),
+            "completed_at": st.get("completed_at"),
+            "checked_at": st.get("checked_at"),
+        }
+
+        out = _run(["sbatch", "sub_vasp.sh"], cwd=jobdir)
+        jid = _parse_sbatch_jobid(out)
+
+        history = list(st.get("resubmit_history") or [])
+        history.append(previous_attempt)
+        st["resubmit_history"] = history
+        st["resubmit_count"] = int(st.get("resubmit_count") or 0) + 1
+        st["last_resubmit_reason"] = reason
+        st["resources_changed_on_resubmit"] = resources_changed
+
+        st["submitted"] = True
+        st["completed"] = False
+        st["failed"] = False
+        st["slurm_job_id"] = jid
+        st["slurm_state"] = "SUBMITTED"
+        st["slurm_exit_code"] = None
+        st["vasp_ok"] = None
+        st["vasp_reason"] = None
+        st["vasp_energy_toten_ev"] = None
+        st["vasp_nions"] = None
+        st["submitted_at"] = _utcnow()
+        st["resubmitted_at"] = st["submitted_at"]
+        st["completed_at"] = None
+        st["checked_at"] = _utcnow()
+        st["sbatch_stdout"] = out
+        _write_state(st_path, st)
+
+        resubmitted.append(jobdir.name)
+        capacity -= 1
+        inflight += 1
+
+    return ResubmitReport(
+        resubmitted=resubmitted,
+        skipped=skipped,
+        inflight=inflight,
+        capacity=capacity,
+        eligible=eligible,
+        status_error=status_error,
+    )
 
 
 def submit_jobs(
