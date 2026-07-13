@@ -149,8 +149,8 @@ def collect_one_job_dir(
         )
 
     atoms = Atoms(symbols=symbols, positions=pos, cell=cell, pbc=pbc)
-    atoms.info["REF_energy"] = float(toten)
-    atoms.arrays["REF_forces"] = frc
+    atoms.info["energy"] = float(toten)
+    atoms.arrays["force"] = frc
     atoms.info["potaudit_job"] = jobdir.name
 
     return CollectedFrame(jobdir.name, atoms, float(toten), True, "ok", completed)
