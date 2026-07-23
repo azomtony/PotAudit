@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 potaudit = "potaudit.cli:main"
+dpgen-fp = "potaudit.dpgen_fp:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

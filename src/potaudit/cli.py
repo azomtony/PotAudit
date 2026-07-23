@@ -518,6 +518,23 @@ def _add_merge_extxyz_subcommand(subparsers):
     p.add_argument("--out", default="vasp_plus_uma.extxyz", help="Output extxyz file")
     p.add_argument("--overwrite", action="store_true")
     p.set_defaults(func=_run_merge_extxyz)
+
+
+def _run_dpgen_fp(args: argparse.Namespace) -> int:
+    from .dpgen_fp import run
+
+    return run(args)
+
+
+def _add_dpgen_fp_subcommand(subparsers):
+    p = subparsers.add_parser(
+        "dpgen-fp",
+        help="Submit and monitor DP-GEN first-principles task folders.",
+    )
+    from .dpgen_fp import add_arguments
+
+    add_arguments(p)
+    p.set_defaults(func=_run_dpgen_fp)
 #------------End Subcommand----------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -536,6 +553,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_collect_vasp_subcommand(subparser)
     _add_uma_annotate_subcommand(subparser)
     _add_merge_extxyz_subcommand(subparser)
+    _add_dpgen_fp_subcommand(subparser)
 #------------End subcommands registration----------------
 
     args=parser.parse_args(argv)

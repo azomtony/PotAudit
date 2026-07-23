@@ -74,3 +74,24 @@ failures. Pass `--strict-slurm-log` to resubmit those incomplete outputs only
 when the job logs also show Slurm/srun trouble such as node failure, timeout,
 cancellation, OOM, PRTE remote-daemon communication loss, or job-step launch
 errors.
+
+## Submit DP-GEN FP Tasks
+
+Submit unfinished DP-GEN first-principles task folders under an `02.fp`
+directory:
+
+```bash
+dpgen-fp \
+  --fp-dir iter.000001/02.fp \
+  --partition Standard.2.0 \
+  --time 12:00:00 \
+  --ntasks-per-node 64
+```
+
+Use `--dry-run` to write `submit.slurm` files and preview submissions without
+calling `sbatch`. By default the generated script purges modules, loads
+`vasp/gnu14.6.5.0`, sets `OMP_NUM_THREADS=1`, and runs
+`mpirun -np ${SLURM_NTASKS} vasp_std 1>>fp.log 2>>fp.log`. Set
+`POTAUDIT_DPGEN_FP_EXCLUDE` to override the default excluded nodes
+`chpc129,chpc098`, or pass `--exclude` directly. The same tool is also available as `potaudit dpgen-fp ...`
+when you want to run it through the main PotAudit command.
