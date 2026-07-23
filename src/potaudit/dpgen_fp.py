@@ -19,7 +19,6 @@ DEFAULT_TEMPLATE = """#!/bin/bash
 #SBATCH --time={time}
 #SBATCH --nodes={nodes}
 #SBATCH --ntasks-per-node={ntasks_per_node}
-#SBATCH --cpus-per-task={cpus_per_task}
 #SBATCH --output=slurm-%j.out
 #SBATCH --error=slurm-%j.err
 #SBATCH --chdir={task_dir}
@@ -265,7 +264,6 @@ def add_arguments(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     )
     p.add_argument("--nodes", type=int, default=1)
     p.add_argument("--ntasks-per-node", type=int, default=1)
-    p.add_argument("--cpus-per-task", type=int, default=1)
     p.add_argument("--command", default=DEFAULT_COMMAND, help=f'Default: "{DEFAULT_COMMAND}"')
 
     p.add_argument("--task-glob", default="task.*", help='Example: "task.000.*"')
