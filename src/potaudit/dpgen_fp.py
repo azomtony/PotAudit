@@ -157,7 +157,6 @@ def write_submit_script(
     exclude = value_for_task(args.exclude, maps["exclude"], task_name)
     nodes = value_for_task(str(args.nodes), maps["nodes"], task_name)
     ntasks_per_node = value_for_task(str(args.ntasks_per_node), maps["ntasks_per_node"], task_name)
-    cpus_per_task = value_for_task(str(args.cpus_per_task), maps["cpus_per_task"], task_name)
     exclude_directive = f"#SBATCH --exclude={exclude}" if exclude else ""
 
     text = template.format(
@@ -168,7 +167,6 @@ def write_submit_script(
         exclude_directive=exclude_directive,
         nodes=nodes,
         ntasks_per_node=ntasks_per_node,
-        cpus_per_task=cpus_per_task,
         task_dir=str(task_dir.resolve()),
         command=args.command,
         task_name=task_name,
@@ -274,7 +272,6 @@ def add_arguments(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     p.add_argument("--exclude-map", action="append", default=[])
     p.add_argument("--nodes-map", action="append", default=[])
     p.add_argument("--ntasks-per-node-map", action="append", default=[])
-    p.add_argument("--cpus-per-task-map", action="append", default=[])
 
     p.add_argument("--watch", action="store_true")
     p.add_argument("--interval", type=int, default=60)
@@ -289,7 +286,6 @@ def run(args: argparse.Namespace) -> int:
         "exclude": parse_system_map(args.exclude_map),
         "nodes": parse_system_map(args.nodes_map),
         "ntasks_per_node": parse_system_map(args.ntasks_per_node_map),
-        "cpus_per_task": parse_system_map(args.cpus_per_task_map),
     }
 
     template = load_template(args.template)
