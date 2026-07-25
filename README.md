@@ -95,3 +95,19 @@ calling `sbatch`. By default the generated script purges modules, loads
 `POTAUDIT_DPGEN_FP_EXCLUDE` to override the default excluded nodes
 `chpc129,chpc098`, or pass `--exclude` directly. The same tool is also available as `potaudit dpgen-fp ...`
 when you want to run it through the main PotAudit command.
+
+## Copy DP-GEN FP Outputs
+
+Copy existing FP outputs from an old scratch directory into the matching local
+`task.*` folders:
+
+```bash
+potaudit dpgen-fp-copy \
+  --local-fp iter.000001/02.fp \
+  --remote-fp /scratch/old/iter.000001/02.fp \
+  --style vasp \
+  --search
+```
+
+This is a dry run by default. Add `--apply` to copy files, and `--overwrite` to
+replace existing local files. `dpgen-fp-sync` is available as an alias.

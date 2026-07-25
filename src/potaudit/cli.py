@@ -535,6 +535,24 @@ def _add_dpgen_fp_subcommand(subparsers):
 
     add_arguments(p)
     p.set_defaults(func=_run_dpgen_fp)
+
+
+def _run_dpgen_fp_copy(args: argparse.Namespace) -> int:
+    from .dpgen_fp_copy import run
+
+    return run(args)
+
+
+def _add_dpgen_fp_copy_subcommand(subparsers):
+    p = subparsers.add_parser(
+        "dpgen-fp-copy",
+        aliases=["dpgen-fp-sync"],
+        help="Copy completed FP output files from an old DP-GEN FP directory into local tasks.",
+    )
+    from .dpgen_fp_copy import add_arguments
+
+    add_arguments(p)
+    p.set_defaults(func=_run_dpgen_fp_copy)
 #------------End Subcommand----------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -554,6 +572,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_uma_annotate_subcommand(subparser)
     _add_merge_extxyz_subcommand(subparser)
     _add_dpgen_fp_subcommand(subparser)
+    _add_dpgen_fp_copy_subcommand(subparser)
 #------------End subcommands registration----------------
 
     args=parser.parse_args(argv)
