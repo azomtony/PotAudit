@@ -111,3 +111,27 @@ potaudit dpgen-fp-copy \
 
 This is a dry run by default. Add `--apply` to copy files, and `--overwrite` to
 replace existing local files. `dpgen-fp-sync` is available as an alias.
+
+## Check DP-GEN FP Convergence
+
+Report VASP FP tasks that exited normally but hit the electronic SCF limit
+instead of converging:
+
+```bash
+potaudit dpgen-fp-converge \
+  --fp-dir iter.000001/02.fp \
+  --only-problems
+```
+
+The checker does not copy or submit anything. It reads `OUTCAR`/`OSZICAR`,
+looks for `aborting loop because EDIFF is reached`, and groups task status by
+DP-GEN system id:
+
+```text
+------task.000-----
+task.000.000001 converged steps_completed=17/200 ionic_steps=1
+task.000.000002 not converged steps_completed=200/200 ionic_steps=1 reason=scf_hit_NELM_steps=1;no_EDIFF_reached
+```
+
+Use `--nelm 200` to override the parsed limit, or `--check-ionic` to also flag
+relaxations that did not satisfy `EDIFFG`.

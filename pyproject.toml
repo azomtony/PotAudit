@@ -13,6 +13,7 @@ dependencies = [
 [project.scripts]
 potaudit = "potaudit.cli:main"
 dpgen-fp = "potaudit.dpgen_fp:main"
+dpgen-fp-converge = "potaudit.dpgen_fp_converge:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

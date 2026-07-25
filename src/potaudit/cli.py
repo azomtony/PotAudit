@@ -553,6 +553,24 @@ def _add_dpgen_fp_copy_subcommand(subparsers):
 
     add_arguments(p)
     p.set_defaults(func=_run_dpgen_fp_copy)
+
+
+def _run_dpgen_fp_converge(args: argparse.Namespace) -> int:
+    from .dpgen_fp_converge import run
+
+    return run(args)
+
+
+def _add_dpgen_fp_converge_subcommand(subparsers):
+    p = subparsers.add_parser(
+        "dpgen-fp-converge",
+        aliases=["dpgen-fp-check"],
+        help="Report DP-GEN VASP FP tasks that finished but did not converge electronically.",
+    )
+    from .dpgen_fp_converge import add_arguments
+
+    add_arguments(p)
+    p.set_defaults(func=_run_dpgen_fp_converge)
 #------------End Subcommand----------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -573,6 +591,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_merge_extxyz_subcommand(subparser)
     _add_dpgen_fp_subcommand(subparser)
     _add_dpgen_fp_copy_subcommand(subparser)
+    _add_dpgen_fp_converge_subcommand(subparser)
 #------------End subcommands registration----------------
 
     args=parser.parse_args(argv)
