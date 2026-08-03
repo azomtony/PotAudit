@@ -571,6 +571,24 @@ def _add_dpgen_fp_converge_subcommand(subparsers):
 
     add_arguments(p)
     p.set_defaults(func=_run_dpgen_fp_converge)
+
+
+def _run_convert_structure(args: argparse.Namespace) -> int:
+    from .structure_convert import run
+
+    return run(args)
+
+
+def _add_convert_structure_subcommand(subparsers):
+    p = subparsers.add_parser(
+        "convert",
+        aliases=["convert-structure"],
+        help="Convert structures between POSCAR and LAMMPS data formats.",
+    )
+    from .structure_convert import add_arguments
+
+    add_arguments(p)
+    p.set_defaults(func=_run_convert_structure)
 #------------End Subcommand----------------
 
 def main(argv: list[str] | None = None) -> int:
@@ -592,6 +610,7 @@ def main(argv: list[str] | None = None) -> int:
     _add_dpgen_fp_subcommand(subparser)
     _add_dpgen_fp_copy_subcommand(subparser)
     _add_dpgen_fp_converge_subcommand(subparser)
+    _add_convert_structure_subcommand(subparser)
 #------------End subcommands registration----------------
 
     args=parser.parse_args(argv)

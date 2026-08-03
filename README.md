@@ -1,6 +1,20 @@
 # PotAudit
 Foundational model validation using VASP and ASE
 
+## Convert Structure Files
+
+Convert between VASP POSCAR/CONTCAR files and LAMMPS data files:
+
+```bash
+potaudit convert --in POSCAR --out lmp
+potaudit convert --in lmp --out POSCAR
+```
+
+Formats are inferred from names like `POSCAR`, `CONTCAR`, `.vasp`, `.lmp`, and
+`.data`. For ambiguous paths, add `--in-format poscar` or `--out-format lmp`.
+When reading a LAMMPS data file without reliable masses, provide atom-type order
+with `--lammps-species "Si O"` so type 1 maps to Si and type 2 maps to O.
+
 ## Prepare VASP Optimizations From Extxyz Files
 
 Create one VASP relaxation job folder per extxyz structure/frame in a directory:
