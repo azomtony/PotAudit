@@ -3,17 +3,21 @@ Foundational model validation using VASP and ASE
 
 ## Convert Structure Files
 
-Convert between VASP POSCAR/CONTCAR files and LAMMPS data files:
+Convert between VASP POSCAR/CONTCAR files and LAMMPS data/dump files:
 
 ```bash
 potaudit convert --in POSCAR --out lmp
 potaudit convert --in lmp --out POSCAR
+potaudit convert --in dump.lammpstrj --out POSCAR --lammps-species "Si O"
 ```
 
-Formats are inferred from names like `POSCAR`, `CONTCAR`, `.vasp`, `.lmp`, and
-`.data`. For ambiguous paths, add `--in-format poscar` or `--out-format lmp`.
-When reading a LAMMPS data file without reliable masses, provide atom-type order
-with `--lammps-species "Si O"` so type 1 maps to Si and type 2 maps to O.
+Formats are inferred from names like `POSCAR`, `CONTCAR`, `.vasp`, `.lmp`,
+`.data`, `.dump`, `.dum`, and `.lammpstrj`. For ambiguous paths, add
+`--in-format poscar`, `--in-format data`, `--in-format dump`, or
+`--out-format data`. When reading a LAMMPS data/dump file without reliable
+masses or element labels, provide atom-type order with `--lammps-species "Si O"`
+so type 1 maps to Si and type 2 maps to O. Dump input reads the last frame by
+default; use `--index 0` or another integer to select a specific frame.
 
 ## Prepare VASP Optimizations From Extxyz Files
 

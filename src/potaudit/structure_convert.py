@@ -9,7 +9,7 @@ from ase.data import atomic_numbers
 from ase.io import read, write
 
 
-SUPPORTED_FORMATS = ("poscar", "lmp")
+SUPPORTED_FORMATS = ("poscar", "data", "dump")
 
 
 @dataclass(frozen=True)
@@ -27,10 +27,15 @@ def _normalize_format(fmt: str) -> str:
         "vasp": "poscar",
         "poscar": "poscar",
         "contcar": "poscar",
-        "lmp": "lmp",
-        "lammps": "lmp",
-        "lammps-data": "lmp",
-        "data": "lmp",
+        "lmp": "data",
+        "lammps": "data",
+        "lammps-data": "data",
+        "data": "data",
+        "dum": "dump",
+        "dump": "dump",
+        "lammpstrj": "dump",
+        "lammps-dump": "dump",
+        "lammps-dump-text": "dump",
     }
     if key not in aliases:
         allowed = ", ".join(SUPPORTED_FORMATS)
@@ -48,19 +53,30 @@ def _infer_format(path: Path) -> str:
         or suffix in {".poscar", ".contcar", ".vasp"}
     ):
         return "poscar"
-    if name in {"lmp", "lammps"} or suffix in {".lmp", ".lammps", ".data"}:
-        return "lmp"
+    if (
+        name in {"lmp", "lammps", "data"}
+        or name.startswith(("data.", "data_", "lmp.", "lmp_", "lammps.", "lammps_"))
+        or suffix in {".lmp", ".lammps", ".data"}
+    ):
+        return "data"
+    if (
+        name in {"dum", "dump", "lammpstrj"}
+        or name.startswith(("dum.", "dum_", "dump.", "dump_"))
+        or suffix in {".dum", ".dump", ".lammpstrj"}
+    ):
+        return "dump"
 
     raise ValueError(
         f"Cannot infer structure format from '{path}'. "
-        "Use --in-format/--out-format with poscar or lmp."
+        "Use --in-format/--out-format with poscar, data, or dump."
     )
 
 
 def _ase_format(fmt: str) -> str:
     return {
         "poscar": "vasp",
-        "lmp": "lammps-data",
+        "data": "lammps-data",
+        "dump": "lammps-dump-text",
     }[fmt]
 
 
@@ -74,7 +90,7 @@ def _first_seen_symbols(symbols: Iterable[str]) -> List[str]:
     return order
 
 
-def _parse_lammps_species(species: Optional[str]) -> Optional[dict[int, int]]:
+def _parse_lammps_species_symbols(species: Optional[str]) -> Optional[List[str]]:
     if species is None:
         return None
 
@@ -82,12 +98,17 @@ def _parse_lammps_species(species: Optional[str]) -> Optional[dict[int, int]]:
     if not symbols:
         raise ValueError("--lammps-species must contain at least one element symbol")
 
-    mapping: dict[int, int] = {}
-    for idx, symbol in enumerate(symbols, start=1):
+    for symbol in symbols:
         if symbol not in atomic_numbers:
             raise ValueError(f"Unknown element symbol in --lammps-species: {symbol}")
-        mapping[idx] = atomic_numbers[symbol]
-    return mapping
+    return symbols
+
+
+def _parse_lammps_z_of_type(species: Optional[str]) -> Optional[dict[int, int]]:
+    symbols = _parse_lammps_species_symbols(species)
+    if symbols is None:
+        return None
+    return {idx: atomic_numbers[symbol] for idx, symbol in enumerate(symbols, start=1)}
 
 
 def read_structure(
@@ -95,15 +116,22 @@ def read_structure(
     *,
     input_format: Optional[str] = None,
     lammps_species: Optional[str] = None,
+    index: int = -1,
 ):
     in_path = Path(path)
     fmt = _normalize_format(input_format) if input_format else _infer_format(in_path)
 
     kwargs = {}
-    if fmt == "lmp":
-        z_of_type = _parse_lammps_species(lammps_species)
+    if fmt == "data":
+        z_of_type = _parse_lammps_z_of_type(lammps_species)
         if z_of_type is not None:
             kwargs["Z_of_type"] = z_of_type
+    elif fmt == "dump":
+        kwargs["order"] = False
+        kwargs["index"] = index
+        specorder = _parse_lammps_species_symbols(lammps_species)
+        if specorder is not None:
+            kwargs["specorder"] = specorder
 
     return read(str(in_path), format=_ase_format(fmt), **kwargs), fmt
 
@@ -122,7 +150,7 @@ def write_structure(
 
     if fmt == "poscar":
         write(str(out_path), atoms, format="vasp", vasp5=True, direct=True, sort=False)
-    elif fmt == "lmp":
+    elif fmt == "data":
         specorder = _first_seen_symbols(atoms.get_chemical_symbols())
         write(
             str(out_path),
@@ -133,6 +161,8 @@ def write_structure(
             masses=True,
             specorder=specorder,
         )
+    elif fmt == "dump":
+        raise ValueError("LAMMPS dump is supported as input only. Use --out data to write a LAMMPS data file.")
     else:
         raise ValueError(f"Unsupported output format '{fmt}'")
 
@@ -148,11 +178,13 @@ def convert_structure(
     lammps_species: Optional[str] = None,
     lammps_style: str = "atomic",
     lammps_units: str = "metal",
+    index: int = -1,
 ) -> ConvertReport:
     atoms, in_fmt = read_structure(
         input_path,
         input_format=input_format,
         lammps_species=lammps_species,
+        index=index,
     )
     out_fmt = write_structure(
         atoms,
@@ -172,11 +204,24 @@ def convert_structure(
 
 
 def add_arguments(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--in", dest="input_path", required=True, help="Input structure file, e.g. POSCAR or structure.lmp")
-    parser.add_argument("--out", dest="output_path", required=True, help="Output structure file, e.g. structure.lmp or POSCAR")
+    parser.add_argument("--in", dest="input_path", required=True, help="Input structure file, e.g. POSCAR, lmp/data, or dump/dum")
+    parser.add_argument("--out", dest="output_path", required=True, help="Output structure file, e.g. POSCAR or lmp/data")
     parser.add_argument(
         "--in-format",
-        choices=("poscar", "vasp", "contcar", "lmp", "lammps", "lammps-data", "data"),
+        choices=(
+            "poscar",
+            "vasp",
+            "contcar",
+            "lmp",
+            "lammps",
+            "lammps-data",
+            "data",
+            "dum",
+            "dump",
+            "lammpstrj",
+            "lammps-dump",
+            "lammps-dump-text",
+        ),
         default=None,
         help="Input format override when it cannot be inferred from the file name",
     )
@@ -189,8 +234,9 @@ def add_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--lammps-species",
         default=None,
-        help="Element order for reading LAMMPS atom types without reliable masses, e.g. 'Si O' for type 1=Si, type 2=O",
+        help="Element order for reading LAMMPS data/dump atom types without reliable masses, e.g. 'Si O' for type 1=Si, type 2=O",
     )
+    parser.add_argument("--index", type=int, default=-1, help="Frame index for LAMMPS dump input (default: -1, last frame)")
     parser.add_argument("--lammps-style", default="atomic", help="LAMMPS atom style for data output (default: atomic)")
     parser.add_argument("--lammps-units", default="metal", help="LAMMPS units for data output (default: metal)")
 
@@ -204,6 +250,7 @@ def run(args: argparse.Namespace) -> int:
         lammps_species=args.lammps_species,
         lammps_style=args.lammps_style,
         lammps_units=args.lammps_units,
+        index=args.index,
     )
     print(
         f"[PotAudit] converted {report.input_format} -> {report.output_format} "
@@ -213,7 +260,7 @@ def run(args: argparse.Namespace) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Convert structure files between POSCAR and LAMMPS data formats.")
+    parser = argparse.ArgumentParser(description="Convert structure files between POSCAR and LAMMPS data/dump formats.")
     add_arguments(parser)
     args = parser.parse_args(argv)
     return run(args)
