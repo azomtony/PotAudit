@@ -14,6 +14,8 @@ dependencies = [
 potaudit = "potaudit.cli:main"
 dpgen-fp = "potaudit.dpgen_fp:main"
 dpgen-fp-converge = "potaudit.dpgen_fp_converge:main"
+job-submit = "potaudit.job_submit:main"
+job-converge = "potaudit.job_converge:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

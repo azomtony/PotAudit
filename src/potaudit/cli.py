@@ -573,6 +573,41 @@ def _add_dpgen_fp_converge_subcommand(subparsers):
     p.set_defaults(func=_run_dpgen_fp_converge)
 
 
+def _run_job_submit(args: argparse.Namespace) -> int:
+    from .job_submit import run
+
+    return run(args)
+
+
+def _add_job_submit_subcommand(subparsers):
+    p = subparsers.add_parser(
+        "job-submit",
+        help="Submit generic VASP job folders after checking local and Slurm status.",
+    )
+    from .job_submit import add_arguments
+
+    add_arguments(p)
+    p.set_defaults(func=_run_job_submit)
+
+
+def _run_job_converge(args: argparse.Namespace) -> int:
+    from .job_converge import run
+
+    return run(args)
+
+
+def _add_job_converge_subcommand(subparsers):
+    p = subparsers.add_parser(
+        "job-converge",
+        aliases=["job-check"],
+        help="Check generic VASP job folders for electronic convergence.",
+    )
+    from .job_converge import add_arguments
+
+    add_arguments(p)
+    p.set_defaults(func=_run_job_converge)
+
+
 def _run_convert_structure(args: argparse.Namespace) -> int:
     from .structure_convert import run
 
@@ -610,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
     _add_dpgen_fp_subcommand(subparser)
     _add_dpgen_fp_copy_subcommand(subparser)
     _add_dpgen_fp_converge_subcommand(subparser)
+    _add_job_submit_subcommand(subparser)
+    _add_job_converge_subcommand(subparser)
     _add_convert_structure_subcommand(subparser)
 #------------End subcommands registration----------------
 

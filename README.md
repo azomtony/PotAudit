@@ -114,6 +114,28 @@ calling `sbatch`. By default the generated script purges modules, loads
 `chpc129,chpc098`, or pass `--exclude` directly. The same tool is also available as `potaudit dpgen-fp ...`
 when you want to run it through the main PotAudit command.
 
+## Submit Generic Job Folders
+
+For a directory containing VASP job folders, use the generic submitter. It
+checks required input files, checks Slurm for running/pending/completed jobs,
+checks local output completion, and submits only jobs that still need to run:
+
+```bash
+job-submit \
+  --jobs-dir runs/case001/vasp \
+  --job-glob "job_*" \
+  --partition Standard.2.0 \
+  --time 12:00:00 \
+  --ntasks-per-node 64 \
+  --exclude node001,node002
+```
+
+Use `--dry-run` to write `submit.slurm` files and preview submissions without
+calling `sbatch`. For VASP, the command requires `INCAR`, `POSCAR`, `POTCAR`,
+and `KPOINTS` in each job folder by default. Add extra checks with `--require`
+or pass `--no-default-require` for custom layouts. The same tool is also
+available as `potaudit job-submit ...`.
+
 ## Copy DP-GEN FP Outputs
 
 Copy existing FP outputs from an old scratch directory into the matching local
@@ -153,3 +175,18 @@ task.000.000002 not converged steps_completed=200/200 ionic_steps=1 reason=scf_h
 
 Use `--nelm 200` to override the parsed limit, or `--check-ionic` to also flag
 relaxations that did not satisfy `EDIFFG`.
+
+## Check Generic Job Convergence
+
+For generic VASP job folders, use the generic convergence checker:
+
+```bash
+potaudit job-converge \
+  --jobs-dir runs/case001/vasp \
+  --job-glob "job_*" \
+  --only-problems
+```
+
+It uses the same VASP `OUTCAR`/`OSZICAR` electronic convergence checks as
+`dpgen-fp-converge`, but prints results by folder path instead of grouping by
+DP-GEN task number. `job-check` is available as an alias.
