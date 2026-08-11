@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import time
+from datetime import datetime
 from pathlib import Path
 
 
@@ -14,6 +15,7 @@ DEFAULT_EXCLUDE = os.environ.get("POTAUDIT_JOB_EXCLUDE", "chpc129,chpc098")
 DEFAULT_TIME = "12:00:00"
 DEFAULT_COMMAND = "mpirun -np ${SLURM_NTASKS} vasp_std 1>>vasp.log 2>>vasp.log"
 DEFAULT_VASP_REQUIRED = ("INCAR", "POSCAR", "POTCAR", "KPOINTS")
+DEFAULT_STATE_FILE = ".potaudit-submit.json"
 
 DEFAULT_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -60,6 +62,23 @@ def run_cmd(cmd: list[str]) -> str:
         return ""
 
 
+def utcnow() -> str:
+    return datetime.utcnow().isoformat() + "Z"
+
+
+def read_state(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def write_state(path: Path, state: dict) -> None:
+    path.write_text(json.dumps(state, indent=2) + "\n")
+
+
 def sanitize_job_name(job_path: Path, root: Path) -> str:
     try:
         label = str(job_path.resolve().relative_to(root.resolve()))
@@ -93,8 +112,8 @@ def job_complete(job_dir: str | Path, style: str) -> bool:
     return False
 
 
-def squeue_state(job_name: str) -> str | None:
-    out = run_cmd(["squeue", "-h", "-n", job_name, "-o", "%T"])
+def squeue_state(job_id: str) -> str | None:
+    out = run_cmd(["squeue", "-h", "-j", job_id, "-o", "%T"])
     states = [x.strip() for x in out.splitlines() if x.strip()]
     if not states:
         return None
@@ -103,8 +122,8 @@ def squeue_state(job_name: str) -> str | None:
     return states[0]
 
 
-def sacct_state(job_name: str) -> str | None:
-    out = run_cmd(["sacct", "-n", "-X", "--name", job_name, "--format=State"])
+def sacct_state(job_id: str) -> str | None:
+    out = run_cmd(["sacct", "-n", "-X", "-j", job_id, "--format=State"])
     states = [x.strip().split()[0] for x in out.splitlines() if x.strip()]
     if not states:
         return None
@@ -113,37 +132,18 @@ def sacct_state(job_name: str) -> str | None:
     return states[-1]
 
 
-def scheduler_state(job_name: str) -> str | None:
-    sq = squeue_state(job_name)
+def scheduler_state(job_id: str) -> str | None:
+    sq = squeue_state(job_id)
     if sq:
         return sq
-    return sacct_state(job_name)
+    return sacct_state(job_id)
 
 
-def sbatch_job_name(script: Path) -> str | None:
-    if not script.is_file():
-        return None
-    try:
-        text = script.read_text(errors="ignore")
-    except OSError:
-        return None
-    for line in text.splitlines():
-        match = re.match(r"\s*#SBATCH\s+--job-name(?:=|\s+)(\S+)", line)
-        if match:
-            return match.group(1)
+def parse_sbatch_jobid(output: str) -> str | None:
+    match = re.search(r"Submitted batch job\s+(\d+)", output)
+    if match:
+        return match.group(1)
     return None
-
-
-def scheduler_state_for_names(job_names: list[str]) -> tuple[str | None, str | None]:
-    for job_name in job_names:
-        state = scheduler_state(job_name)
-        if state in ACTIVE_STATES:
-            return state, job_name
-    for job_name in job_names:
-        state = scheduler_state(job_name)
-        if state:
-            return state, job_name
-    return None, None
 
 
 def parse_name_map(items: list[str] | None) -> dict[str, str]:
@@ -260,6 +260,7 @@ def one_pass(args: argparse.Namespace, template: str, maps: dict[str, dict[str, 
     skipped_complete = 0
     skipped_active = 0
     skipped_done_scheduler = 0
+    resubmitted_after_terminal = 0
     skipped_missing_files = 0
     checked = 0
 
@@ -276,22 +277,19 @@ def one_pass(args: argparse.Namespace, template: str, maps: dict[str, dict[str, 
             print(f"[complete-local] {job_dir.name}")
             continue
 
-        generated_job_name = sanitize_job_name(job_dir, root)
-        existing_job_name = sbatch_job_name(job_dir / args.submit_file)
-        scheduler_names = [generated_job_name]
-        if existing_job_name and existing_job_name not in scheduler_names:
-            scheduler_names.append(existing_job_name)
-        state, matched_job_name = scheduler_state_for_names(scheduler_names)
+        state_path = job_dir / args.state_file
+        stored = read_state(state_path)
+        stored_job_id = str(stored.get("slurm_job_id") or "").strip()
+        state = scheduler_state(stored_job_id) if stored_job_id else None
 
         if state in ACTIVE_STATES:
             skipped_active += 1
-            print(f"[{state.lower()}] {job_dir.name} {matched_job_name}")
+            print(f"[{state.lower()}] {job_dir.name} jobid={stored_job_id}")
             continue
 
         if state in DONE_STATES:
-            skipped_done_scheduler += 1
-            print(f"[completed-scheduler] {job_dir.name} {matched_job_name}")
-            continue
+            resubmitted_after_terminal += 1
+            print(f"[completed-scheduler-local-incomplete] {job_dir.name} jobid={stored_job_id}")
 
         if args.max_submit is not None and submitted >= args.max_submit:
             print(f"[submit-limit] {job_dir.name}")
@@ -299,6 +297,22 @@ def one_pass(args: argparse.Namespace, template: str, maps: dict[str, dict[str, 
 
         script, job_name = write_submit_script(job_dir, root, template, args, maps)
         result = submit_job(script, args.dry_run)
+        job_id = parse_sbatch_jobid(result)
+        if job_id:
+            history = list(stored.get("history") or [])
+            if stored:
+                history.append(stored)
+            write_state(
+                state_path,
+                {
+                    "slurm_job_id": job_id,
+                    "job_name": job_name,
+                    "submit_file": args.submit_file,
+                    "submitted_at": utcnow(),
+                    "sbatch_stdout": result,
+                    "history": history,
+                },
+            )
         submitted += 1
         print(f"[submit] {job_dir.name} {job_name}: {result}")
 
@@ -310,6 +324,7 @@ def one_pass(args: argparse.Namespace, template: str, maps: dict[str, dict[str, 
                 "complete_local": skipped_complete,
                 "active_or_pending": skipped_active,
                 "completed_scheduler": skipped_done_scheduler,
+                "resubmitted_after_scheduler_terminal": resubmitted_after_terminal,
                 "missing_required_files": skipped_missing_files,
             },
             indent=2,
@@ -325,6 +340,11 @@ def add_arguments(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     p.add_argument("--style", default="vasp", choices=["vasp", "abacus", "pwscf", "qe", "cp2k"])
     p.add_argument("--template", default=None)
     p.add_argument("--submit-file", default="submit.slurm")
+    p.add_argument(
+        "--state-file",
+        default=DEFAULT_STATE_FILE,
+        help=f"Per-folder submit state file used to track exact Slurm job id (default: {DEFAULT_STATE_FILE})",
+    )
 
     p.add_argument("--partition", required=True)
     p.add_argument("--time", default=DEFAULT_TIME, help=f"Slurm walltime (default: {DEFAULT_TIME})")

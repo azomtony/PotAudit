@@ -136,6 +136,11 @@ and `KPOINTS` in each job folder by default. Add extra checks with `--require`
 or pass `--no-default-require` for custom layouts. The same tool is also
 available as `potaudit job-submit ...`.
 
+After submission, each job folder gets a `.potaudit-submit.json` file with the
+exact Slurm job id. Later runs use that job id to detect running or pending
+jobs. Completed jobs are skipped only when the local output files are complete;
+an old Slurm job with the same name in another directory is ignored.
+
 ## Copy DP-GEN FP Outputs
 
 Copy existing FP outputs from an old scratch directory into the matching local
