@@ -23,6 +23,8 @@ DEFAULT_TEMPLATE = """#!/bin/bash
 #SBATCH --error=slurm-%j.err
 #SBATCH --chdir={task_dir}
 {exclude_directive}
+#SBATCH --exclusive
+#SBATCH --mem=0
 
 set -euo pipefail
 
