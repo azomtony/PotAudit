@@ -32,14 +32,16 @@ module purge
 module load vasp/gnu14.6.5.0
 export OMP_NUM_THREADS=1
 
-echo "Node list: ${SLURM_JOB_NODELIST}"
+cd "{task_dir}"
+
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node list: $SLURM_JOB_NODELIST"
 echo "Expanded nodes:"
-scontrol show hostnames "${SLURM_JOB_NODELIST}"
+scontrol show hostnames "$SLURM_JOB_NODELIST"
 echo "Running on host: $(hostname)"
-echo "SLURM_NTASKS: ${SLURM_NTASKS}"
+echo "SLURM_NTASKS: $SLURM_NTASKS"
 echo "Start time: $(date -Is)"
 
-cd "{task_dir}"
 {command}
 """
 
