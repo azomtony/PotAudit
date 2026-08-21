@@ -32,7 +32,6 @@ module purge
 module load vasp/gnu14.6.5.0
 export OMP_NUM_THREADS=1
 
-echo "Job ID: ${SLURM_JOB_ID}"
 echo "Node list: ${SLURM_JOB_NODELIST}"
 echo "Expanded nodes:"
 scontrol show hostnames "${SLURM_JOB_NODELIST}"
