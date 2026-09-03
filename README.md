@@ -114,6 +114,19 @@ calling `sbatch`. By default the generated script purges modules, loads
 `chpc129,chpc098`, or pass `--exclude` directly. The same tool is also available as `potaudit dpgen-fp ...`
 when you want to run it through the main PotAudit command.
 
+For GPU VASP, pass `--gpu-vasp`. The built-in GPU script keeps the module and
+VASP paths fixed, while `--partition`, `--time`, and `--gpus` control the Slurm
+resource request:
+
+```bash
+dpgen-fp \
+  --fp-dir iter.000001/02.fp \
+  --gpu-vasp \
+  --partition gpucompute-h100-preempt \
+  --time 04:00:00 \
+  --gpus 1
+```
+
 ## Submit Generic Job Folders
 
 For a directory containing VASP job folders, use the generic submitter. It

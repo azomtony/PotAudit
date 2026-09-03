@@ -12,6 +12,7 @@ from pathlib import Path
 DEFAULT_EXCLUDE = os.environ.get("POTAUDIT_DPGEN_FP_EXCLUDE", "chpc129,chpc098")
 DEFAULT_TIME = "12:00:00"
 DEFAULT_COMMAND = "mpirun -np ${SLURM_NTASKS} vasp_std 1>>fp.log 2>>fp.log"
+DEFAULT_GPUS = 1
 
 DEFAULT_TEMPLATE = """#!/bin/bash
 #SBATCH --job-name={job_name}
@@ -43,6 +44,43 @@ echo "SLURM_NTASKS: $SLURM_NTASKS"
 echo "Start time: $(date -Is)"
 
 {command}
+"""
+
+GPU_VASP_TEMPLATE = """#!/bin/bash
+#SBATCH --job-name={job_name}
+#SBATCH --partition={partition}
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:{gpus}
+#SBATCH --time={time}
+#SBATCH --output=vasp.o%j
+#SBATCH --error=vasp.e%j
+#SBATCH --chdir={task_dir}
+
+set -euo pipefail
+
+module purge
+module load cuda/13.3
+module load gnu12/12.2.0
+module use /data/home/gazom/Programs/nvidia/hpc_sdk/modulefiles
+module load nvhpc/25.9
+
+export NVHPC=/data/home/gazom/Programs/nvidia/hpc_sdk
+export PATH=$NVHPC/Linux_x86_64/25.9/comm_libs/mpi/bin:$NVHPC/Linux_x86_64/25.9/compilers/bin:$PATH
+export LD_LIBRARY_PATH=/data/home/gazom/Programs/fftw-3.3.10-nvhpc/lib:$LD_LIBRARY_PATH
+
+export OMP_STACKSIZE=2048m
+export ACC_DEVICE_TYPE=nvidia
+export NVCOMPILER_ACC_NOTIFY=0
+
+echo "Host: $(hostname)"
+echo "CUDA_VISIBLE_DEVICES=${{CUDA_VISIBLE_DEVICES:-unset}}"
+command -v mpirun
+command -v vasp_std || true
+nvidia-smi
+
+mpirun --bind-to none -np {gpus} /data/home/gazom/Programs/vasp.6.6.1/bin/vasp_std >fp.log
+
+echo "Successfully Ended"
 """
 
 ACTIVE_STATES = {
@@ -148,8 +186,10 @@ def value_for_task(default: str, mapping: dict[str, str], task_name: str) -> str
     return mapping.get(task_name, mapping.get(sid, default))
 
 
-def load_template(path: str | None) -> str:
+def load_template(path: str | None, gpu_vasp: bool = False) -> str:
     if path is None:
+        if gpu_vasp:
+            return GPU_VASP_TEMPLATE
         return DEFAULT_TEMPLATE
     return Path(path).read_text()
 
@@ -168,12 +208,14 @@ def write_submit_script(
     exclude = value_for_task(args.exclude, maps["exclude"], task_name)
     nodes = value_for_task(str(args.nodes), maps["nodes"], task_name)
     ntasks_per_node = value_for_task(str(args.ntasks_per_node), maps["ntasks_per_node"], task_name)
+    gpus = value_for_task(str(args.gpus), maps["gpus"], task_name)
     exclude_directive = f"#SBATCH --exclude={exclude}" if exclude else ""
 
     text = template.format(
         job_name=job_name,
         partition=partition,
         time=slurm_time,
+        gpus=gpus,
         exclude=exclude,
         exclude_directive=exclude_directive,
         nodes=nodes,
@@ -262,10 +304,16 @@ def add_arguments(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     p.add_argument("--fp-dir", default="iter.000001/02.fp")
     p.add_argument("--style", default="vasp", choices=["vasp", "abacus", "pwscf", "qe", "cp2k"])
     p.add_argument("--template", default=None)
+    p.add_argument(
+        "--gpu-vasp",
+        action="store_true",
+        help="Use the built-in GPU VASP Slurm script. Partition, time, and GPU count remain configurable.",
+    )
     p.add_argument("--submit-file", default="submit.slurm")
 
     p.add_argument("--partition", required=True)
     p.add_argument("--time", default=DEFAULT_TIME, help=f"Slurm walltime (default: {DEFAULT_TIME})")
+    p.add_argument("--gpus", type=int, default=DEFAULT_GPUS, help=f"GPU count for --gpu-vasp (default: {DEFAULT_GPUS})")
     p.add_argument(
         "--exclude",
         default=DEFAULT_EXCLUDE,
@@ -283,6 +331,7 @@ def add_arguments(p: argparse.ArgumentParser) -> argparse.ArgumentParser:
     p.add_argument("--exclude-map", action="append", default=[])
     p.add_argument("--nodes-map", action="append", default=[])
     p.add_argument("--ntasks-per-node-map", action="append", default=[])
+    p.add_argument("--gpus-map", action="append", default=[])
 
     p.add_argument("--watch", action="store_true")
     p.add_argument("--interval", type=int, default=60)
@@ -297,9 +346,10 @@ def run(args: argparse.Namespace) -> int:
         "exclude": parse_system_map(args.exclude_map),
         "nodes": parse_system_map(args.nodes_map),
         "ntasks_per_node": parse_system_map(args.ntasks_per_node_map),
+        "gpus": parse_system_map(args.gpus_map),
     }
 
-    template = load_template(args.template)
+    template = load_template(args.template, gpu_vasp=args.gpu_vasp)
 
     while True:
         one_pass(args, template, maps)
